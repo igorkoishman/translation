@@ -1,0 +1,14 @@
+services:
+  translation-service:
+    image: igorkoishman/translation-app:latest
+    build: .
+    container_name: translation-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.docker
+    volumes:
+      - data:/outputs
+    restart: unless-stopped
+volumes:
+  data:

@@ -2,4 +2,3 @@ models/
 outputs/
 .env
 .env.docker
-docker-compose.yml

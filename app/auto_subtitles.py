@@ -279,6 +279,7 @@ def main(video_path, output_path_base, model_name_or_dir="faster-whisper-small",
         print("Transcribing with WhisperX...")
         result = transcribe_audio_whisperx(audio_path, model_name_or_dir=model_name_or_dir, device=device, language=language)
 
+
         srt_paths = {}
         # Save original language SRT (always!)
         srt_orig = os.path.join(tmpdir, "subtitles_orig.srt")

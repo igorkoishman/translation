@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from app.auto_subtitles import main as subtitle_main
 
 app = FastAPI()
-OUTPUT_DIR = "outputs"
+OUTPUT_DIR = os.getenv("OUTPUT_DIR")
 
 load_dotenv()
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -23,16 +23,18 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 # MODEL_PATH = os.getenv("MODEL_PATH", "/models/faster-whisper-small")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Adjust if main.py is inside 'app/'
 MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(BASE_DIR, "models/faster-whisper-small"))
+print(f"MODEL_PATH resolved to 2: {MODEL_PATH}")
 if not os.path.isabs(MODEL_PATH):
+    print("absulute method")
     # If running from inside 'app/', go up one level
     BASE_DIR = os.path.dirname(BASE_DIR)
     MODEL_PATH = os.path.abspath(os.path.join(BASE_DIR, MODEL_PATH))
     OUTPUT_DIR = os.path.abspath(os.path.join(BASE_DIR, "outputs"))
-print("MODEL_PATH resolved to:", MODEL_PATH)
 # OUTPUT_DIR = os.getenv("OUTPUT_DIR", os.path.join(BASE_DIR, "outputs"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-print(f"MODEL_PATH resolved to: {MODEL_PATH}")
-print(f"OUTPUT_DIR resolved to: {OUTPUT_DIR}")
+print(f"BASE_DIR resolved to 2: {BASE_DIR}")
+print(f"MODEL_PATH resolved to 2: {MODEL_PATH}")
+print(f"OUTPUT_DIR resolved to 2: {OUTPUT_DIR}")
 print(f"Exists? {os.path.isdir(MODEL_PATH)}")
 
 @app.get("/", response_class=HTMLResponse)

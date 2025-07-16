@@ -1,0 +1,30 @@
+# Ignore Python cache and temp files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.swp
+
+# Ignore local environment and editor settings
+.env
+.venv/
+env/
+venv/
+.idea/
+.vscode/
+.DS_Store
+
+# Ignore model and output folders (DON'T copy these to image!)
+models/
+outputs/
+
+# Ignore test cache
+.pytest_cache/
+
+# Ignore log files
+*.log
+
+# Ignore Docker and Git files you don’t want in image
+.dockerignore
+.git
+.gitignore

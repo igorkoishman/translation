@@ -7,7 +7,8 @@ import textwrap
 import requests
 import srt
 import whisperx
-
+import ssl
+import huggingface_hub
 
 def google_translate_text(text, target='he', api_key=None):
     url = "https://translation.googleapis.com/language/translate/v2"
@@ -82,23 +83,50 @@ def extract_audio(video_path, audio_path):
 #     result = model.transcribe(audio_path, language=language)
 #     return result
 
-def transcribe_audio_whisperx(audio_path,model_name_or_dir, device="cpu", language=None):
-    local_model_path = "/Users/ikoishman/PycharmProjects/translation/models/faster-whisper-small"
-    try:
-        # Try local directory first
+
+
+# last working
+# def transcribe_audio_whisperx(audio_path,model_name_or_dir, device="cpu", language=None):
+#     try:
+#         # Try local directory first
+#         model = whisperx.load_model(
+#             model_name_or_dir,
+#             device=device,
+#             compute_type="float16" if device.startswith("cuda") else "float32",
+#             local_files_only=True
+#         )
+#     except Exception:
+#         # If not found, download by model name
+#         model = whisperx.load_model(
+#             "small",
+#             device=device,
+#             compute_type="float16" if device.startswith("cuda") else "float32",
+#              download_root=model_name_or_dir,
+#             local_files_only=False
+#         )
+#     return model.transcribe(audio_path, language=language)
+
+
+def transcribe_audio_whisperx(audio_path, model_name_or_dir, device="cpu", language=None):
+    print("Trying model path:", model_name_or_dir)
+
+    if os.path.exists(model_name_or_dir) and os.listdir(model_name_or_dir):
+        print("Found local model directory.")
         model = whisperx.load_model(
             model_name_or_dir,
             device=device,
             compute_type="float16" if device.startswith("cuda") else "float32",
             local_files_only=True
         )
-    except Exception:
-        # If not found, download by model name
+    else:
+        os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
+        ssl._create_default_https_context = ssl._create_unverified_context
+        print("Downloading model to:", model_name_or_dir)
         model = whisperx.load_model(
-            "small",
+            "small",  # or full HF model name if needed
             device=device,
             compute_type="float16" if device.startswith("cuda") else "float32",
-             download_root=model_name_or_dir,
+            download_root=model_name_or_dir,
             local_files_only=False
         )
     return model.transcribe(audio_path, language=language)
@@ -283,28 +311,28 @@ def main(video_path, output_path_base, model_name_or_dir="faster-whisper-small",
             shutil.move(path, out_srt)
             print(f"SRT file saved: {out_srt}")
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 4:
-        print("Usage: python auto_subtitle.py input_video output_video model_dir_or_name [lang1 lang2 ...]")
-        print("Example: python auto_subtitle.py input.mp4 output.mp4 faster-whisper-small he en ru")
-        print("For CUDA/GPU: edit the script to set device='cuda'")
-        sys.exit(1)
-    video_path = sys.argv[1]
-    output_path_base = sys.argv[2]
-    model_name_or_dir = sys.argv[3]  # e.g. "faster-whisper-small" or a folder
-    output_languages = sys.argv[4:] if len(sys.argv) > 4 else []
-    GOOGLE_API_KEY = "AIzaSyDaMcdpM5lBHuUATrZAD3gX0GAUmi5hfXs"  # replace with your key or use os.getenv
-    # Set device to "cuda" if you have a GPU and PyTorch CUDA installed
-    main(
-        video_path,
-        output_path_base,
-        model_name_or_dir,
-        output_languages=output_languages,
-        api_key=GOOGLE_API_KEY,
-        device="cpu",  # or "cuda"
-        language=None  # Set to "en", "he", etc., to force language, else None for auto
-    )
+# if __name__ == "__main__":
+#     import sys
+#     if len(sys.argv) < 4:
+#         print("Usage: python auto_subtitle.py input_video output_video model_dir_or_name [lang1 lang2 ...]")
+#         print("Example: python auto_subtitle.py input.mp4 output.mp4 faster-whisper-small he en ru")
+#         print("For CUDA/GPU: edit the script to set device='cuda'")
+#         sys.exit(1)
+#     video_path = sys.argv[1]
+#     output_path_base = sys.argv[2]
+#     model_name_or_dir = sys.argv[3]  # e.g. "faster-whisper-small" or a folder
+#     output_languages = sys.argv[4:] if len(sys.argv) > 4 else []
+#     GOOGLE_API_KEY = "AIzaSyDaMcdpM5lBHuUATrZAD3gX0GAUmi5hfXs"  # replace with your key or use os.getenv
+#     # Set device to "cuda" if you have a GPU and PyTorch CUDA installed
+#     main(
+#         video_path,
+#         output_path_base,
+#         model_name_or_dir,
+#         output_languages=output_languages,
+#         api_key=GOOGLE_API_KEY,
+#         device="cpu",  # or "cuda"
+#         language=None  # Set to "en", "he", etc., to force language, else None for auto
+#     )
 
 
 # auto_subtitles.py english.mp4 output_large.mp4 /Users/ikoishman/faster-whisper-small

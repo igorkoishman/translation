@@ -1,0 +1,4 @@
+models/
+outputs/
+.env
+docker-compose.yml

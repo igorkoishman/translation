@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+aiofiles
+python-multipart
+whisperx @ git+https://github.com/m-bain/whisperx.git
+torch
+srt
+python-dotenv
+requests
+ffmpeg-python
+faster-whisper

@@ -2,3 +2,4 @@ models/
 outputs/
 .env
 .env.docker
+app2/models/

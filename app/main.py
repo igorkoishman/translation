@@ -11,6 +11,7 @@ from app.auto_subtitles_combined_models import main
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import sys
+load_dotenv()
 print("Python version:", sys.version)
 print("Python executable:", sys.executable)
 app = FastAPI()
@@ -34,14 +35,18 @@ def resolve_project_path(env_var_name: str, default_subdir: str):
 # Usage
 MODEL_DIR = resolve_project_path("MODEL_DIR", "model")
 OUTPUT_DIR = resolve_project_path("OUTPUT_DIR", "outputs")
-
+print("CWD:", os.getcwd())
+print("Static exists?", os.path.exists("static"))
+print("Static abs path:", os.path.abspath("static"))
 
 
 BASE_DIR2 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # one level up from app/
 STATIC_DIR = os.path.join(BASE_DIR2, "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+print("CWD:", os.getcwd())
+print("Static exists?", os.path.exists("static"))
+print("Static abs path:", os.path.abspath("static"))
 
-load_dotenv()
 
 # BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # PARENT_DIR = os.path.dirname(BASE_DIR)
@@ -57,77 +62,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-# @app.get("/", response_class=HTMLResponse)
-# async def home():
-#     return """
-#     <h1>Auto Subtitle Generator</h1>
-#     <form id="upload-form" enctype="multipart/form-data">
-#         <input type="file" id="file-input" name="file" accept="video/*" /><br>
-# 
-#         <input type="text" id="langs" name="langs" placeholder="Languages (e.g. he ru)" /><br>
-# 
-#         <label for="model_type">Model Type (backend):</label><br>
-#         <select id="model_type" name="model_type">
-#             <option value="faster-whisper" selected>faster-whisper (whisperx)</option>
-#             <option value="openai-whisper">openai-whisper</option>
-#         </select><br><br>
-# 
-#         <label for="model">Model Name:</label><br>
-#         <select id="model" name="model">
-#             <option value="tiny">tiny</option>
-#             <option value="base">base</option>
-#             <option value="small" selected>small</option>
-#             <option value="medium">medium</option>
-#             <option value="large">large</option>
-#         </select><br><br>
-# 
-#         <button type="submit">Upload & Process</button>
-#     </form>
-# 
-#     <div id="progress"></div>
-#     <div id="result"></div>
-# 
-#     <script>
-#     const form = document.getElementById('upload-form');
-#     form.onsubmit = async (e) => {
-#         e.preventDefault();
-# 
-#         const fileInput = document.getElementById('file-input');
-#         const langs = document.getElementById('langs').value;
-#         const model = document.getElementById('model').value;
-#         const model_type = document.getElementById('model_type').value;
-# 
-#         const formData = new FormData();
-#         formData.append('file', fileInput.files[0]);
-#         formData.append('langs', langs);
-#         formData.append('model', model);
-#         formData.append('backend', model_type);  // note: backend param to match backend code
-# 
-#         document.getElementById('progress').innerText = 'Uploading...';
-#         const res = await fetch('/upload', { method: 'POST', body: formData });
-#         const data = await res.json();
-# 
-#         document.getElementById('progress').innerText = 'Processing...';
-#         checkStatus(data.job_id);
-#     };
-# 
-#     async function checkStatus(job_id) {
-#         const res = await fetch('/status/' + job_id);
-#         const data = await res.json();
-# 
-#         if (data.status === 'done') {
-#             let links = '';
-#             for (const [label, file] of Object.entries(data.outputs)) {
-#                 links += `<div><a href="/download/${file}">${label}</a></div>`;
-#             }
-#             document.getElementById('result').innerHTML = links;
-#             document.getElementById('progress').innerText = 'Done!';
-#         } else {
-#             setTimeout(() => checkStatus(job_id), 2000);
-#         }
-#     }
-#     </script>
-#     """
+
 
 
 @app.post("/upload")
@@ -135,7 +70,8 @@ async def upload_video(
         file: UploadFile = File(...),
         langs: str = Form(""),
         model: str = Form("large"),
-        model_type: str = Form("faster-whisper")
+        model_type: str = Form("faster-whisper"),
+        processor: str = Form("cpu")
 ):
     start_time = datetime.now()
     job_id = str(uuid.uuid4())
@@ -160,16 +96,17 @@ async def upload_video(
         model_name=model_type,
         backend=model,
         api_key=GOOGLE_API_KEY,
+        device=processor,
         output_languages=langs_list
     )
 
     # Save outputs
     outputs = {
-        "orig": f"{job_id}_output_orig.mp4",
+        "orig": f"{job_id}_output_orig.{ext}",
         "orig_srt": f"{job_id}_output_orig.srt",
     }
     for lang in langs_list:
-        outputs[lang] = f"{job_id}_output_{lang}.mp4"
+        outputs[lang] = f"{job_id}_output_{lang}.{ext}"
         outputs[f"{lang}_srt"] = f"{job_id}_output_{lang}.srt"
 
     duration = round((datetime.now() - start_time).total_seconds(), 2)
@@ -192,9 +129,23 @@ def status(job_id: str):
         with open(status_path) as f:
             outputs = json.load(f)
 
-        # Filter only string values (filenames)
-        files = {k: v for k, v in outputs.items() if isinstance(v, str) and os.path.isfile(os.path.join(OUTPUT_DIR, v))}
-        return {"status": "done", "outputs": files}
+        # Extract duration_seconds (if exists)
+        duration = outputs.get("duration_seconds", None)
+
+        # Filter only string values that exist as files
+        files = {
+            k: v
+            for k, v in outputs.items()
+            if k != "duration_seconds"
+            and isinstance(v, str)
+            and os.path.isfile(os.path.join(OUTPUT_DIR, v))
+        }
+
+        return {
+            "status": "done",
+            "outputs": files,
+            "duration_seconds": duration
+        }
     return {"status": "processing"}
 
 @app.get("/download/{output_file}")

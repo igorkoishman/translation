@@ -2,3 +2,5 @@ models/
 outputs/
 .env
 .env.docker
+__pycache__/
+*.pyc

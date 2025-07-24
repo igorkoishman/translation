@@ -1,0 +1,93 @@
+// document.addEventListener('DOMContentLoaded', () => {
+//   const form = document.getElementById('upload-form');
+//   const modelTypeSelect = document.getElementById('model_type');
+//   const modelSelect = document.getElementById('model');
+//
+//   const modelsByBackend = {
+//     'faster-whisper': [
+//       'tiny', 'base', 'small', 'medium',
+//       'large-v1', 'large-v2', 'large-v3', 'large'
+//     ],
+//     'openai-whisper': [
+//       'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
+//       'medium', 'medium.en', 'large', 'large-v1', 'large-v2', 'large-v3',
+//       'distil-small.en', 'distil-medium.en', 'distil-large-v2', 'distil-large-v3',
+//       'large-v3-turbo', 'turbo'
+//     ]
+//   };
+//
+//   function updateModelOptions() {
+//     const selectedBackend = modelTypeSelect.value;
+//     const modelOptions = modelsByBackend[selectedBackend] || [];
+//
+//     modelSelect.innerHTML = '';
+//     for (const model of modelOptions) {
+//       const option = document.createElement('option');
+//       option.value = model;
+//       option.textContent = model;
+//       modelSelect.appendChild(option);
+//     }
+//   }
+//
+//   modelTypeSelect.addEventListener('change', updateModelOptions);
+//   updateModelOptions(); // Initialize on load
+//
+//   form.onsubmit = async (e) => {
+//     e.preventDefault();
+//
+//     const fileInput = document.getElementById('file-input');
+//     const langs = document.getElementById('langs').value;
+//     const model = modelSelect.value;
+//     const model_type = modelTypeSelect.value;
+//     const align = document.getElementById('align').checked;
+//
+//     const formData = new FormData();
+//     formData.append('file', fileInput.files[0]);
+//     formData.append('langs', langs);
+//     formData.append('model', model);
+//     formData.append('backend', model_type);
+//     formData.append('align', align);
+//
+//     document.getElementById('progress').innerText = 'Uploading...';
+//     document.getElementById('result').innerHTML = '';
+//
+//     try {
+//       const res = await fetch('/upload', { method: 'POST', body: formData });
+//       const data = await res.json();
+//
+//       if (!data.job_id) {
+//         document.getElementById('progress').innerText = 'Error: No job_id received';
+//         return;
+//       }
+//
+//       document.getElementById('progress').innerText = 'Processing...';
+//       checkStatus(data.job_id);
+//     } catch (err) {
+//       console.error(err);
+//       document.getElementById('progress').innerText = 'Upload failed.';
+//     }
+//   };
+//
+//   async function checkStatus(job_id) {
+//     try {
+//       const res = await fetch('/status/' + job_id);
+//       const data = await res.json();
+//
+//       if (data.status === 'done') {
+//         let links = '';
+//         for (const [label, file] of Object.entries(data.outputs)) {
+//           links += `<div><a href="/download/${file}" target="_blank">${label}</a></div>`;
+//         }
+//         document.getElementById('result').innerHTML = links;
+//         document.getElementById('progress').innerText = 'Done!';
+//       } else if (data.status === 'failed') {
+//         document.getElementById('progress').innerText = 'Processing failed.';
+//       } else {
+//         setTimeout(() => checkStatus(job_id), 2000);
+//       }
+//     } catch (err) {
+//       console.error(err);
+//       document.getElementById('progress').innerText = 'Error checking status.';
+//     }
+//   }
+// });

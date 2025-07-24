@@ -9,6 +9,10 @@ import srt
 import whisperx
 import ssl
 import huggingface_hub
+import logging
+import torch
+print("DEBUG: Starting subtitle main() function")
+logging.basicConfig(level=logging.INFO)
 
 def google_translate_text(text, target='he', api_key=None):
     url = "https://translation.googleapis.com/language/translate/v2"
@@ -30,86 +34,12 @@ def extract_audio(video_path, audio_path):
     ]
     subprocess.run(cmd, check=True)
 
-# def transcribe_audio_whisperx(audio_path, model_name_or_dir="faster-whisper-small", device="cpu", language=None):
-#     import whisperx
-#     model = whisperx.load_model(
-#         model_name_or_dir,
-#         device=device,
-#         compute_type="float16" if device.startswith("cuda") else "float32",local_files_only=True
-#     )
-#     result = model.transcribe(audio_path, language=language)
-#     # result['segments'] is a list of dicts: {'start', 'end', 'text'}
-#     return result
-
-# def transcribe_audio_whisperx(audio_path, model_name_or_dir="faster-whisper-small", device="cpu", language=None):
-#     import whisperx
-#     try:
-#         model = whisperx.load_model(
-#             model_name_or_dir,
-#             device=device,
-#             compute_type="float16" if device.startswith("cuda") else "float32",
-#             local_files_only=True
-#         )
-#     except Exception:
-#         # If local not found, allow download
-#         model = whisperx.load_model(
-#             "guillaumekln/faster-whisper-small",
-#             device=device,
-#             compute_type="float16" if device.startswith("cuda") else "float32"
-#             # local_files_only not set
-#         )
-#     result = model.transcribe(audio_path, language=language)
-#     return result
 
 
-# def transcribe_audio_whisperx(audio_path, model_name_or_dir="faster-whisper-small", device="cpu", language=None):
-#     import whisperx
-#     try:
-#         model = whisperx.load_model(
-#             model_name_or_dir,
-#             device=device,
-#             compute_type="float16" if device.startswith("cuda") else "float32",
-#             local_files_only=True,
-#             download_root="/models/faster-whisper-small"
-#         )
-#     except Exception:
-#         model = whisperx.load_model(
-#             model_name_or_dir,
-#             device=device,
-#             compute_type="float16" if device.startswith("cuda") else "float32",
-#             local_files_only=False,
-#             download_root="/models/faster-whisper-small"
-#         )
-#     result = model.transcribe(audio_path, language=language)
-#     return result
-
-
-
-# last working
-# def transcribe_audio_whisperx(audio_path,model_name_or_dir, device="cpu", language=None):
-#     try:
-#         # Try local directory first
-#         model = whisperx.load_model(
-#             model_name_or_dir,
-#             device=device,
-#             compute_type="float16" if device.startswith("cuda") else "float32",
-#             local_files_only=True
-#         )
-#     except Exception:
-#         # If not found, download by model name
-#         model = whisperx.load_model(
-#             "small",
-#             device=device,
-#             compute_type="float16" if device.startswith("cuda") else "float32",
-#              download_root=model_name_or_dir,
-#             local_files_only=False
-#         )
-#     return model.transcribe(audio_path, language=language)
-
-
-def transcribe_audio_whisperx(audio_path, model_name_or_dir, device="cpu", language=None):
+def transcribe_audio_whisperx(audio_path, model_name_or_dir, device="cuda", language=None):
     print("Trying model path:", model_name_or_dir)
-
+    logging.info(f"CUDA available: {torch.cuda.is_available()}")
+    logging.info(f"CUDA device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
     if os.path.exists(model_name_or_dir) and os.listdir(model_name_or_dir):
         print("Found local model directory.")
         model = whisperx.load_model(
@@ -130,80 +60,6 @@ def transcribe_audio_whisperx(audio_path, model_name_or_dir, device="cpu", langu
             local_files_only=False
         )
     return model.transcribe(audio_path, language=language)
-
-# def create_srt(segments, srt_path, to_language=None, do_translate=False, api_key=None):
-#     print(f"Creating SRT: {srt_path} ({'translating' if do_translate else 'original'})")
-#     subs = []
-#     for i, seg in enumerate(segments):
-#         start = seg.get('start')
-#         end = seg.get('end')
-#         text = seg.get('text', '').strip()
-#         if start is None or end is None or not text:
-#             continue
-#         if do_translate and text and to_language:
-#             try:
-#                 translated = google_translate_text(text, target=to_language, api_key=api_key)
-#                 print(f"ORIG: {text}\n{to_language.upper()}: {translated}\n---")
-#             except Exception as e:
-#                 print(f"Translation error: {e}")
-#                 translated = text
-#         else:
-#             translated = text
-#         subs.append(srt.Subtitle(
-#             index=len(subs) + 1,
-#             start=srt.timedelta(seconds=start),
-#             end=srt.timedelta(seconds=end),
-#             content=translated
-#         ))
-#     with open(srt_path, "w", encoding="utf-8") as f:
-#         f.write(srt.compose(subs))
-
-# def create_srt(segments, srt_path, to_language=None, do_translate=False, api_key=None, max_chars=80, max_lines=2, max_duration=5.0):
-#     print(f"Creating SRT: {srt_path} ({'translating' if do_translate else 'original'})")
-#     subs = []
-#     idx = 1
-#     for seg in segments:
-#         start = seg.get('start')
-#         end = seg.get('end')
-#         text = seg.get('text', '').strip()
-#         if start is None or end is None or not text:
-#             continue
-#         Optionally translate
-        # if do_translate and text and to_language:
-        #     try:
-        #         translated = google_translate_text(text, target=to_language, api_key=api_key)
-        #         text = translated
-        #     except Exception as e:
-        #         print(f"Translation error: {e}")
-        #         fallback to original text
-        #
-        # Split the text into chunks no longer than (max_chars * max_lines)
-        # and with no more than max_lines per sub
-        # lines = textwrap.wrap(text, width=max_chars)
-        # for i in range(0, len(lines), max_lines):
-        #     sub_lines = lines[i:i+max_lines]
-        #     sub_text = '\n'.join(sub_lines)
-        #
-            # Proportional timing: divide the segment's time by number of sub-blocks
-            # seg_duration = end - start
-            # num_blocks = (len(lines) + max_lines - 1) // max_lines
-            # this_block = i // max_lines
-            # Compute times for this block, clamp to max_duration
-            # block_start = start + (seg_duration * this_block / num_blocks)
-            # block_end = start + (seg_duration * (this_block+1) / num_blocks)
-            # if block_end - block_start > max_duration:
-            #     block_end = block_start + max_duration
-            #
-            # subs.append(srt.Subtitle(
-            #     index=idx,
-            #     start=srt.timedelta(seconds=block_start),
-            #     end=srt.timedelta(seconds=block_end),
-            #     content=sub_text
-            # ))
-            # idx += 1
-    #
-    # with open(srt_path, "w", encoding="utf-8") as f:
-    #     f.write(srt.compose(subs))
 
 def create_srt(
     segments, srt_path, to_language=None, do_translate=False, api_key=None,
@@ -270,7 +126,7 @@ def burn_subtitles(video_path, srt_path, output_path):
     ]
     subprocess.run(cmd, check=True)
 
-def main(video_path, output_path_base, model_name_or_dir="faster-whisper-small", output_languages=None, api_key=None, device="cpu", language=None):
+def main(video_path, output_path_base, model_name_or_dir="faster-whisper-small", output_languages=None, api_key=None, device="cuda", language=None):
     with tempfile.TemporaryDirectory() as tmpdir:
         print(f"Temporary directory: {tmpdir}")
         audio_path = os.path.join(tmpdir, "audio.wav")
@@ -311,29 +167,3 @@ def main(video_path, output_path_base, model_name_or_dir="faster-whisper-small",
             # os.rename(path, out_srt)
             shutil.move(path, out_srt)
             print(f"SRT file saved: {out_srt}")
-
-# if __name__ == "__main__":
-#     import sys
-#     if len(sys.argv) < 4:
-#         print("Usage: python auto_subtitle.py input_video output_video model_dir_or_name [lang1 lang2 ...]")
-#         print("Example: python auto_subtitle.py input.mp4 output.mp4 faster-whisper-small he en ru")
-#         print("For CUDA/GPU: edit the script to set device='cuda'")
-#         sys.exit(1)
-#     video_path = sys.argv[1]
-#     output_path_base = sys.argv[2]
-#     model_name_or_dir = sys.argv[3]  # e.g. "faster-whisper-small" or a folder
-#     output_languages = sys.argv[4:] if len(sys.argv) > 4 else []
-#     GOOGLE_API_KEY = "AIzaSyDaMcdpM5lBHuUATrZAD3gX0GAUmi5hfXs"  # replace with your key or use os.getenv
-#     # Set device to "cuda" if you have a GPU and PyTorch CUDA installed
-#     main(
-#         video_path,
-#         output_path_base,
-#         model_name_or_dir,
-#         output_languages=output_languages,
-#         api_key=GOOGLE_API_KEY,
-#         device="cpu",  # or "cuda"
-#         language=None  # Set to "en", "he", etc., to force language, else None for auto
-#     )
-
-
-# auto_subtitles.py english.mp4 output_large.mp4 /Users/ikoishman/faster-whisper-small

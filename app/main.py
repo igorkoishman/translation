@@ -10,9 +10,12 @@ from dotenv import load_dotenv
 from app.auto_subtitles import main as subtitle_main
 
 app = FastAPI()
-OUTPUT_DIR = os.getenv("OUTPUT_DIR")
+
+
+
 
 load_dotenv()
+OUTPUT_DIR = os.getenv("OUTPUT_DIR")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 # BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

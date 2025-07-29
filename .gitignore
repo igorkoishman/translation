@@ -4,3 +4,4 @@ outputs/
 .env.docker
 __pycache__/
 *.pyc
+model

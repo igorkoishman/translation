@@ -26,9 +26,12 @@ document.addEventListener('DOMContentLoaded', () => {
       modelSelect.appendChild(option);
     }
   }
-
-  modelTypeSelect.addEventListener('change', updateModelOptions);
+modelTypeSelect.addEventListener('change', () => {
+  console.log("Selected model type:", modelTypeSelect.value);
   updateModelOptions();
+});
+//  modelTypeSelect.addEventListener('change', updateModelOptions);
+//  updateModelOptions();
 
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -44,10 +47,10 @@ document.addEventListener('DOMContentLoaded', () => {
     formData.append('file', fileInput.files[0]);
     formData.append('langs', langs);
     formData.append('model', model);
-    formData.append('backend', model_type);
+    formData.append('model_type', model_type);
     formData.append('align', align);
     formData.append('processor', processor);
-
+console.log("Submitting model_type:", model_type);
     document.getElementById('progress').innerText = 'Uploading...';
     document.getElementById('result').innerHTML = '';
 

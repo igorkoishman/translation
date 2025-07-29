@@ -156,3 +156,5 @@ def download_file(output_file: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8181, reload=True)
+
+# DOCKER_BUILDKIT=0 docker build --network=host -t my-image .

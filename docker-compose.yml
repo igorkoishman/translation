@@ -1,7 +1,9 @@
+version: "3.9"
+
 services:
   translation-service:
-    image: igorkoishman/translation-app:latest
     build: .
+    image: igorkoishman/translation-app:latest
     container_name: translation-app
     ports:
       - "8000:8000"
@@ -10,5 +12,6 @@ services:
     volumes:
       - data:/outputs
     restart: unless-stopped
+
 volumes:
   data:

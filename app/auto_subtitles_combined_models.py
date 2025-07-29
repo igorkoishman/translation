@@ -1,7 +1,7 @@
 import os
 import shutil
 import subprocess
-import tempfile
+import platform
 import textwrap
 import requests
 import srt
@@ -10,6 +10,9 @@ import ssl
 import logging
 import torch
 import glob
+import importlib.util
+import sys
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 print("DEBUG: Starting subtitle tool...")
@@ -73,7 +76,7 @@ def get_faster_whisper_model_path(models_root: str, backend_name: str, model_siz
         os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
         ssl._create_default_https_context = ssl._create_unverified_context
 
-        compute_type = "float16" if device.startswith("cuda") else "float32"
+        compute_type = "int8_float32" if device.startswith("cuda") else "float32"
 
         # Trigger download by loading model with local_files_only=False
         whisperx.load_model(
@@ -95,10 +98,10 @@ def transcribe_audio_faster_whisper(audio_path: str, models_root: str, backend_n
                                     device="cuda", language=None, align_output=True):
     logging.info(f"CUDA available: {torch.cuda.is_available()}")
     logging.info(f"CUDA device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
-    model_path = get_faster_whisper_model_path(models_root, backend_name, model_size)
+    model_path = get_faster_whisper_model_path(models_root, backend_name, model_size,device=device)
     print(f"🧠 Loading faster-whisper model from: {model_path}")
 
-    compute_type = "float16" if device.startswith("cuda") else "float32"
+    compute_type = "int8_float32" if device.startswith("cuda") else "float32"
 
     model = whisperx.load_model(
         model_path,
@@ -159,26 +162,36 @@ def create_srt(segments, srt_path, to_language=None, do_translate=False, api_key
     with open(srt_path, "w", encoding="utf-8") as f:
         f.write(srt.compose(subs))
 
-def burn_subtitles(video_path, srt_path, output_path):
-    # cmd = [
-    #     'ffmpeg', '-y', '-i', video_path,
-    #     '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
-    #     '-c:a', 'copy', output_path
-    # ]
-    cmd = [
-        'ffmpeg', '-y', '-hwaccel', 'cuda', '-i', video_path,
-        '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
-        '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '18',
-        '-c:a', 'copy',
-        output_path
-    ]
-    subprocess.run(cmd, check=True)
+# def burn_subtitles(video_path, srt_path, output_path,device):
+#     # cmd = [
+#     #     'ffmpeg', '-y', '-i', video_path,
+#     #     '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+#     #     '-c:a', 'copy', output_path
+#     # ]
+#
+#     if device == 'cpu':
+#         cmd = [
+#             'ffmpeg', '-y', '-i', video_path,
+#             '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+#             '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+#             '-c:a', 'copy',
+#             output_path
+#         ]
+#     else:
+#         cmd = [
+#             'ffmpeg', '-y', '-hwaccel', 'cuda', '-i', video_path,
+#             '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+#             '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '18',
+#             '-c:a', 'copy',
+#             output_path
+#         ]
+#     subprocess.run(cmd, check=True)
 
 def main(video_path, output_path_base, model_name_or_dir, model_name, backend,
          output_languages=None, api_key=None, device="cuda", language=None):
     import tempfile
     import shutil
-
+    ml_device, video_device = resolve_device(device)
     with tempfile.TemporaryDirectory() as tmpdir:
         print(f"🔧 Working in temp dir: {tmpdir}")
 
@@ -187,37 +200,48 @@ def main(video_path, output_path_base, model_name_or_dir, model_name, backend,
         extract_audio(video_path, audio_path)
 
         # Compose full model path
-        if model_name == "faster-whisper":
-            model_path = build_model_path(model_name_or_dir, model_name, backend)
-        elif model_name == "openai-whisper":
-            model_path = backend  # for openai whisper backend param is the model size (like 'small')
-        else:
-            raise ValueError(f"Unsupported model backend: {model_name}")
+        # if model_name == "faster-whisper":
+        #     model_path = build_model_path(model_name_or_dir, model_name, backend)
+        # elif model_name == "openai-whisper":
+        #     openai_whisper = load_openai_whisper()
+        # else:
+        #     raise ValueError(f"Unsupported model backend: {model_name}")
 
-        print(f"Loading model from {model_path}")
-        print(f"🎙️ Transcribing and aligning with model at: {model_path}")
+        # print(f"Loading model from {model_path}")
+        # print(f"🎙️ Transcribing and aligning with model at: {model_path}")
 
         # Transcribe audio
         if model_name == "faster-whisper":
+            model_path = build_model_path(model_name_or_dir, model_name, backend)
+            print(f"Loading model from {model_path}")
+            print(f"🎙️ Transcribing and aligning with model at: {model_path}")
             result = transcribe_audio_faster_whisper(
                 audio_path,
                 models_root=model_name_or_dir,
                 backend_name=model_name,
                 model_size=backend,
-                device=device,
+                device=ml_device,
                 language=language,
                 align_output=True
             )
         elif model_name == "openai-whisper":
-            import whisper
-            model = whisper.load_model(backend, device=device)
-            transcribed = model.transcribe(audio_path, language=language)
-            result = {
-                "segments": transcribed["segments"],
-                "language": transcribed.get("language", language or "und")
-            }
-        else:
-            raise ValueError("❌ Invalid backend. Choose 'faster-whisper' or 'openai-whisper'.")
+             import importlib
+             openai_whisper = load_openai_whisper()
+             # openai_whisper = importlib.import_module("whisper")
+             # model = openai_whisper.load_model(backend, device=ml_device)
+             transcribed = openai_whisper.transcribe(audio_path, language=language)
+             result = {
+                 "segments": transcribed["segments"],
+                 "language": transcribed.get("language", language or "und")
+             }
+             # Optional: align result using whisperx alignment tools
+             if True:  # or align_output flag
+                 model_a, metadata = whisperx.load_align_model(
+                     language_code=result["language"], device=ml_device)
+                 result = whisperx.align(result["segments"], model_a, metadata, audio_path, ml_device)
+
+             else:
+                 raise ValueError("❌ Invalid model_name. Must be 'faster-whisper' or 'openai-whisper'.")
 
         srt_paths = {}
 
@@ -239,7 +263,7 @@ def main(video_path, output_path_base, model_name_or_dir, model_name, backend,
                 # out_video = os.path.splitext(output_path_base)[0] + f"_{lang}.mp4"
 
                 # Burn translated subtitles into the video
-                burn_subtitles(video_path, srt_lang, out_video)
+                burn_subtitles(video_path, srt_lang, out_video,device=video_device)
                 print(f"✅ Done with {lang}: {out_video}")
 
         # Burn original subtitles into video
@@ -253,3 +277,186 @@ def main(video_path, output_path_base, model_name_or_dir, model_name, backend,
             final_srt_path = os.path.splitext(output_path_base)[0] + f"_{lang}.srt"
             shutil.move(path, final_srt_path)
             print(f"💾 Saved subtitle file: {final_srt_path}")
+
+
+def has_cuda_nvenc():
+    """Check if ffmpeg supports CUDA/NVENC."""
+    try:
+        result = subprocess.check_output(['ffmpeg', '-encoders'], stderr=subprocess.STDOUT, text=True)
+        return 'h264_nvenc' in result
+    except subprocess.CalledProcessError:
+        return False
+# worked
+# def burn_subtitles(video_path, srt_path, output_path, device=None):
+#     device = resolve_device(device)
+#
+#     if device == 'cuda':
+#         cmd = [
+#             'ffmpeg', '-y', '-hwaccel', 'cuda', '-i', video_path,
+#             '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+#             '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '18',
+#             '-c:a', 'copy',
+#             output_path
+#         ]
+#     else:
+#         cmd = [
+#             'ffmpeg', '-y', '-i', video_path,
+#             '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+#             '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+#             '-c:a', 'copy',
+#             output_path
+#         ]
+#
+#     subprocess.run(cmd, check=True)
+
+def burn_subtitles(video_path, srt_path, output_path, device=None):
+    device = resolve_device(device)
+
+    if device == 'videotoolbox':
+        cmd = [
+            'ffmpeg', '-y', '-i', video_path,
+            '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+            '-c:v', 'h264_videotoolbox',
+            '-c:a', 'copy',
+            output_path
+        ]
+    elif device == 'cuda':
+        cmd = [
+            'ffmpeg', '-y', '-hwaccel', 'cuda', '-i', video_path,
+            '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+            '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '18',
+            '-c:a', 'copy',
+            output_path
+        ]
+    else:
+        cmd = [
+            'ffmpeg', '-y', '-i', video_path,
+            '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-c:a', 'copy',
+            output_path
+        ]
+
+    subprocess.run(cmd, check=True)
+
+
+# def burn_subtitles(video_path, srt_path, output_path, device=None):
+#     # Auto-determine device if not specified
+#     if device is None:
+#         if platform.system() == 'Darwin':
+#             # macOS: CUDA not supported
+#             device = 'cpu'
+#         elif has_cuda_nvenc():
+#             device = 'cuda'
+#         else:
+#             device = 'cpu'
+#
+#     if device == 'cuda':
+#         cmd = [
+#             'ffmpeg', '-y', '-hwaccel', 'cuda', '-i', video_path,
+#             '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+#             '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '18',
+#             '-c:a', 'copy',
+#             output_path
+#         ]
+#     else:
+#         cmd = [
+#             'ffmpeg', '-y', '-i', video_path,
+#             '-vf', f"subtitles={srt_path}:force_style='FontName=Arial'",
+#             '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+#             '-c:a', 'copy',
+#             output_path
+#         ]
+#
+#     subprocess.run(cmd, check=True)
+
+# worked
+# def resolve_device(device: str = None) -> str:
+#     """Normalize device selection across OSes and environments."""
+#     if platform.system() == 'Darwin':
+#         # macOS never supports CUDA
+#         return 'cpu'
+#     if device == 'cuda':
+#         if has_cuda_nvenc() and torch.cuda.is_available():
+#             return 'cuda'
+#         else:
+#             print("⚠️ CUDA requested but not available. Falling back to CPU.")
+#             return 'cpu'
+#     return device or 'cpu'
+
+# def resolve_device(device: str = None) -> str:
+#     import platform
+#     import torch
+#
+#     if device:  # Explicit user preference
+#         if device == "cuda" and torch.cuda.is_available():
+#             return "cuda"
+#         return "cpu"
+#
+#     if platform.system() == 'Darwin':
+#         return 'cpu'
+#
+#     if torch.cuda.is_available():
+#         return 'cuda'
+#
+#     return 'cpu'
+
+# def resolve_device(device: str = None) -> str:
+#     import platform
+#     import torch
+#
+#     system = platform.system()
+#
+#     # if device:  # User-specified
+#     #     if device == "cuda" and torch.cuda.is_available():
+#     #         return "cuda"
+#     #     elif device == "videotoolbox":
+#     #         return "videotoolbox"
+#     #     else:
+#     #         return "cpu"
+#
+#     if system == 'Darwin':
+#         return "videotoolbox"
+#
+#     if torch.cuda.is_available():
+#         return "cuda"
+#
+#     return "cpu"
+
+
+def resolve_device(user_device: str = None):
+    import platform
+    import torch
+
+    system = platform.system()
+
+    # if user_device == "cuda" and torch.cuda.is_available():
+    #     return "cuda", "cuda"
+    # if user_device == "videotoolbox":
+    #     return "cpu", "videotoolbox"
+    # if user_device == "cpu":
+    #     return "cpu", "cpu"
+
+    # Auto-select
+    if system == "Darwin":
+        return "cpu", "videotoolbox"
+    if torch.cuda.is_available():
+        return "cuda", "cuda"
+    return "cpu", "cpu"
+
+def load_openai_whisper():
+    """
+    Load OpenAI Whisper dynamically to avoid conflicts with faster-whisper.
+    """
+    try:
+        spec = importlib.util.find_spec("whisper")
+        if spec is None:
+            raise ImportError("OpenAI Whisper not found.")
+
+        openai_whisper = importlib.util.module_from_spec(spec)
+        sys.modules["openai_whisper"] = openai_whisper
+        spec.loader.exec_module(openai_whisper)
+        return openai_whisper
+    except Exception as e:
+        print(f"❌ Failed to load OpenAI Whisper: {e}")
+        raise

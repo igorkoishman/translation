@@ -37,6 +37,7 @@ modelTypeSelect.addEventListener('change', () => {
 
     const fileInput = document.getElementById('file-input');
     const langs = document.getElementById('langs').value;
+    const original_lang = document.getElementById('original_lang').value;
     const model = modelSelect.value;
     const model_type = modelTypeSelect.value;
     const processor = document.getElementById('processor').value;
@@ -45,11 +46,12 @@ modelTypeSelect.addEventListener('change', () => {
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
     formData.append('langs', langs);
+    formData.append('original_lang', original_lang);
     formData.append('model', model);
     formData.append('model_type', model_type);
     formData.append('align', align);
     formData.append('processor', processor);
-console.log("Submitting model_type:", model_type);
+    console.log("Submitting model_type:", model_type);
     document.getElementById('progress').innerText = 'Uploading...';
     document.getElementById('result').innerHTML = '';
 

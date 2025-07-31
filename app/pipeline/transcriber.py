@@ -39,38 +39,19 @@ class FasterWhisperTranscriber(Transcriber):
         model = whisperx.load_model(
             model_path, device=self.device, compute_type=compute_type, local_files_only=True
         )
-        result = model.transcribe(audio_path, language=language)
-        language = result["language"]
+        transcribed = model.transcribe(audio_path, language=language)
+        language = transcribed["language"]
         if align_output:
             print(f"Aliging Rows")
             try:
                 model_a, metadata = whisperx.load_align_model(language_code=language, device= self.device)
                 print("Starting alignment...")
-                result = whisperx.align(result["segments"], model_a, metadata, audio_path,  self.device)
+                transcribed = whisperx.align(transcribed["segments"], model_a, metadata, audio_path,  self.device)
                 print("Alignment finished.")
             except Exception as e:
                 print(f"⚠️ Alignment failed: {e}")
-        return result,language
+        return transcribed,language
 
-# class OpenAIWhisperTranscriber(Transcriber):
-#     def __init__(self, model_size, device="cpu"):
-#         self.model_size = model_size
-#         self.device = device
-#
-#     def transcribe(self, audio_path, language=None):
-#         spec = importlib.util.find_spec("whisper")
-#         if not spec:
-#             raise ImportError("OpenAI Whisper not found.")
-#         openai_whisper = importlib.util.module_from_spec(spec)
-#         spec.loader.exec_module(openai_whisper)
-#         model = openai_whisper.load_model(self.model_size, device=self.device)
-#         transcribed = model.transcribe(audio_path, language=language)
-#         model_a, metadata = whisperx.load_align_model(language_code=transcribed.get("language", language or "und"), device=self.device)
-#         aligned = whisperx.align(transcribed["segments"], model_a, metadata, audio_path, self.device)
-#         return {
-#             aligned,
-#             transcribed.get("language", language or "und")
-#         }
 
 class OpenAIWhisperTranscriber(Transcriber):
     def __init__(self, models_root,backend_name,model_size,device):
@@ -83,7 +64,7 @@ class OpenAIWhisperTranscriber(Transcriber):
         folder_name = f"{self.backend_name}-{self.model_size}"
         return os.path.join(self.models_root, folder_name)
 
-    def transcribe(self, audio_path, language=None):
+    def transcribe(self, audio_path, language=None,align_output=True):
         model_path = self.get_model_path()
         os.makedirs(model_path, exist_ok=True)
         spec = importlib.util.find_spec("whisper")
@@ -99,12 +80,20 @@ class OpenAIWhisperTranscriber(Transcriber):
 
         model = openai_whisper.load_model(self.model_size, **model_kwargs)
         transcribed = model.transcribe(audio_path, language=language)
-        model_a, metadata = whisperx.load_align_model(
-            language_code=transcribed.get("language", language or "und"),
-            device=self.device
-        )
-        aligned = whisperx.align(transcribed["segments"], model_a, metadata, audio_path, self.device)
-        return  aligned,transcribed["language"]
+        language = transcribed["language"]
+        if align_output:
+            print(f"Aliging Rows")
+            try:
+                model_a, metadata = whisperx.load_align_model(
+                    language_code=transcribed.get("language", language or "und"),
+                    device=self.device
+                )
+                print("Starting alignment...")
+                transcribed = whisperx.align(transcribed["segments"], model_a, metadata, audio_path, self.device)
+                print("Alignment finished.")
+            except Exception as e:
+                print(f"⚠️ Alignment failed: {e}")
+        return  transcribed,language
 
 
 

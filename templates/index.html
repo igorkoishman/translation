@@ -39,22 +39,22 @@
     </form>
 
     <div id="progress"></div>
-    <div id="result"></div>
+     <div style="margin-top:2em;">
+      <table id="results-table" border="1" style="width:100%; display:none;">
+        <thead>
+          <tr>
+            <th>Input File</th>
+            <th>Output Type</th>
+            <th>Full Output File Name</th>
+            <th>Download</th>
+            <th>Processing Time (s)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
-<div style="margin-top:2em;">
-  <table id="results-table" border="1" style="width:100%; display:none;">
-    <thead>
-      <tr>
-        <th>Input File</th>
-        <th>Output Type</th>
-        <th>Full Output File Name</th>
-        <th>Download</th>
-        <th>Processing Time (s)</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</div>
+
   <script src="/static/js/upload.js"></script>
 </body>
 </html>

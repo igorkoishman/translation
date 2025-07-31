@@ -1,6 +1,7 @@
 # app/main.py
 
 import os
+import secrets
 import uuid
 from datetime import datetime
 from fastapi import FastAPI, Request, File, UploadFile, Form
@@ -51,7 +52,8 @@ async def upload_video(
     # job_id = str(uuid.uuid4())
     splitterd=file.filename.split('.')
     ext = splitterd[-1]
-    job_id = splitterd[0]+"_"+str(uuid.uuid4())
+    job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
+    # job_id = splitterd[0]+"_"+str(uuid.uuid4())
     input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
     with open(input_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -62,9 +64,9 @@ async def upload_video(
     ml_device, video_device = resolve_device(user_device=processor)
     # Pipeline construction
     if model_type == "faster-whisper":
-        transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, device=ml_device)
+        transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
     else:
-        transcriber = OpenAIWhisperTranscriber(model, device=ml_device)
+        transcriber = OpenAIWhisperTranscriber(MODEL_DIR,model_type,model, ml_device)
     burner = FFmpegBurner()
 
     translator = None

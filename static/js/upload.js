@@ -2,7 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('upload-form');
   const modelTypeSelect = document.getElementById('model_type');
   const modelSelect = document.getElementById('model');
-  const progressDiv = document.getElementById('progress');
+  const progressList = document.getElementById('progress-list');
   const resultsTable = document.getElementById('results-table');
   const resultsTbody = resultsTable.querySelector('tbody');
 
@@ -27,8 +27,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   modelTypeSelect.addEventListener('change', updateModelOptions);
-
-  // initial model options
   updateModelOptions();
 
   form.onsubmit = async (e) => {
@@ -44,11 +42,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const align = document.getElementById('align').checked;
 
     if (!file) {
-      progressDiv.innerText = "No file selected.";
+      let errorDiv = document.createElement('div');
+      errorDiv.style.color = "red";
+      errorDiv.style.fontWeight = "bold";
+      errorDiv.innerText = "No file selected.";
+      progressList.appendChild(errorDiv);
       return;
     }
 
-    progressDiv.innerText = `Uploading ${file.name}...`;
+    let safeId = "progress_" + file.name.replace(/[^a-zA-Z0-9\-_\.]/g, "_");
+    let thisProgress = document.getElementById(safeId);
+    if (!thisProgress) {
+      thisProgress = document.createElement('div');
+      thisProgress.id = safeId;
+      thisProgress.style.fontWeight = "bold";
+      thisProgress.style.color = "green";
+      thisProgress.style.fontSize = "2em";
+      thisProgress.style.marginBottom = "8px";
+      progressList.appendChild(thisProgress);
+    }
+    thisProgress.innerText = `Uploading ${file.name}...`;
 
     const formData = new FormData();
     formData.append('file', file);
@@ -64,48 +77,46 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
 
       if (!data.job_id) {
-        progressDiv.innerText = 'Error: No job_id received';
+        thisProgress.innerText = 'Error: No job_id received';
+        thisProgress.style.color = "red";
         return;
       }
-
-      progressDiv.innerText = `Processing ${file.name}...`;
-      await checkStatus(data.job_id, file.name);
+//      let jobs = JSON.parse(localStorage.getItem('submittedJobs') || '[]');
+//      jobs.push({job_id: data.job_id, filename: file.name});
+//      localStorage.setItem('submittedJobs', JSON.stringify(jobs));
+      thisProgress.innerText = `Processing ${file.name}...`;
+      await checkStatus(data.job_id, file.name, thisProgress);
     } catch (err) {
-      console.error(err);
-      progressDiv.innerText = 'Upload failed.';
+      console.error(err);3
+      thisProgress.innerText = 'Upload failed.';
+      thisProgress.style.color = "red";
     }
   };
 
-  async function checkStatus(job_id, inputFileName) {
+  async function checkStatus(job_id, inputFileName, thisProgress) {
     try {
       const res = await fetch('/status/' + job_id);
       const data = await res.json();
 
       if (data.status === 'done') {
-        progressDiv.innerHTML = `<span style="color:green;font-weight:bold">Done! (${inputFileName})</span>`;
+        thisProgress.innerHTML = `<span style="color:green;font-weight:bold">Done! (${inputFileName})</span>`;
         resultsTable.style.display = ''; // show the table if hidden
 
-        // data.outputs: { label: fullOutputFileName }
-        // Example: { "orig": "myfile_123_output_orig.mp4", "orig_srt": "myfile_123_output_orig.srt", ... }
-        // Show every output in a new row
         let firstRow = true;
+        const nOutputs = Object.keys(data.outputs).length;
         for (const [label, fullOutputFileName] of Object.entries(data.outputs)) {
-          // skip if not a real file name
           if (!fullOutputFileName || typeof fullOutputFileName !== 'string') continue;
-
           const tr = document.createElement('tr');
           if (firstRow) {
-            // Input file cell, only once per upload
             tr.innerHTML = `
-              <td rowspan="${Object.keys(data.outputs).length}">${inputFileName}</td>
+              <td rowspan="${nOutputs}">${inputFileName}</td>
               <td>${label}</td>
               <td>${fullOutputFileName}</td>
               <td><a href="/download/${fullOutputFileName}" target="_blank">Download</a></td>
-              <td rowspan="${Object.keys(data.outputs).length}">${data.duration_seconds || ''}</td>
+              <td rowspan="${nOutputs}">${data.duration_seconds || ''}</td>
             `;
             firstRow = false;
           } else {
-            // Other outputs for same upload
             tr.innerHTML = `
               <td>${label}</td>
               <td>${fullOutputFileName}</td>
@@ -115,13 +126,34 @@ document.addEventListener('DOMContentLoaded', () => {
           resultsTbody.appendChild(tr);
         }
       } else if (data.status === 'failed') {
-        progressDiv.innerText = 'Processing failed.';
+        thisProgress.innerText = 'Processing failed.';
+        thisProgress.style.color = "red";
       } else {
-        setTimeout(() => checkStatus(job_id, inputFileName), 2000);
+        setTimeout(() => checkStatus(job_id, inputFileName, thisProgress), 2000);
       }
     } catch (err) {
       console.error(err);
-      progressDiv.innerText = 'Error checking status.';
+      thisProgress.innerText = 'Error checking status.';
+      thisProgress.style.color = "red";
     }
   }
 });
+//window.addEventListener('DOMContentLoaded', () => {
+//  const jobs = JSON.parse(localStorage.getItem('submittedJobs') || '[]');
+//  for (const {job_id, filename} of jobs) {
+//    // Recreate per-file progress bar (optional: show "Restoring...")
+//    let safeId = "progress_" + filename.replace(/[^a-zA-Z0-9\-_\.]/g, "_");
+//    let thisProgress = document.getElementById(safeId);
+//    if (!thisProgress) {
+//      thisProgress = document.createElement('div');
+//      thisProgress.id = safeId;
+//      thisProgress.style.fontWeight = "bold";
+//      thisProgress.style.color = "gray";
+//      thisProgress.style.fontSize = "2em";
+//      thisProgress.style.marginBottom = "8px";
+//      thisProgress.innerText = `Restoring status for ${filename}...`;
+//      document.getElementById('progress-list').appendChild(thisProgress);
+//    }
+//    checkStatus(job_id, filename, thisProgress);
+//  }
+//});

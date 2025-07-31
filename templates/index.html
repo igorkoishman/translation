@@ -8,38 +8,31 @@
 <body>
   <div class="container">
     <h1>Auto Subtitle Generator</h1>
-
     <form id="upload-form" enctype="multipart/form-data">
       <label for="file-input">Select Video File:</label>
       <input type="file" name="file" id="file-input" required />
-
       <label for="langs">Languages (e.g. he ru):</label>
-      <input type="text" name="langs" id="langs" placeholder="Languages (e.g. he ru)" />
+      <input type="text" name="langs" id="langs" />
       <label for="original_lang">Original language</label>
-      <input type="text" name="original_lang" id="original_lang" placeholder="Languages (e.g. he ru)" />
-
+      <input type="text" name="original_lang" id="original_lang" />
       <label for="align">Align Words?</label>
       <input type="checkbox" name="align" id="align" checked />
-
       <label for="model_type">Model Type:</label>
       <select name="model_type" id="model_type" required>
         <option value="faster-whisper">faster-whisper</option>
         <option value="openai-whisper">openai-whisper</option>
       </select>
-        <label for="processor">Processor Type:</label>
+      <label for="processor">Processor Type:</label>
       <select name="processor" id="processor" required>
         <option value="cpu">cpu</option>
         <option value="cuda">gpu</option>
       </select>
-
       <label for="model">Model:</label>
       <select name="model" id="model" required></select>
-
       <button type="submit">Upload &amp; Process</button>
     </form>
-
-    <div id="progress"></div>
-     <div style="margin-top:2em;">
+    <div id="progress-list"></div>
+    <div style="margin-top:2em;">
       <table id="results-table" border="1" style="width:100%; display:none;">
         <thead>
           <tr>
@@ -54,7 +47,6 @@
       </table>
     </div>
   </div>
-
   <script src="/static/js/upload.js"></script>
 </body>
 </html>

@@ -2,7 +2,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('upload-form');
   const modelTypeSelect = document.getElementById('model_type');
   const modelSelect = document.getElementById('model');
-
+  const progressDiv = document.getElementById('progress');
+  const resultsTable = document.getElementById('results-table');
+  const resultsTbody = resultsTable.querySelector('tbody');
 
   const modelsByBackend = {
     'faster-whisper': ['tiny', 'base', 'small', 'medium', 'large-v1', 'large-v2', 'large-v3', 'large'],
@@ -16,7 +18,6 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateModelOptions() {
     const selectedBackend = modelTypeSelect.value;
     const modelOptions = modelsByBackend[selectedBackend] || [];
-
     modelSelect.innerHTML = '';
     for (const model of modelOptions) {
       const option = document.createElement('option');
@@ -25,17 +26,16 @@ document.addEventListener('DOMContentLoaded', () => {
       modelSelect.appendChild(option);
     }
   }
-modelTypeSelect.addEventListener('change', () => {
-  console.log("Selected model type:", modelTypeSelect.value);
+  modelTypeSelect.addEventListener('change', updateModelOptions);
+
+  // initial model options
   updateModelOptions();
-});
-//  modelTypeSelect.addEventListener('change', updateModelOptions);
-//  updateModelOptions();
 
   form.onsubmit = async (e) => {
     e.preventDefault();
 
     const fileInput = document.getElementById('file-input');
+    const file = fileInput.files[0];
     const langs = document.getElementById('langs').value;
     const original_lang = document.getElementById('original_lang').value;
     const model = modelSelect.value;
@@ -43,72 +43,85 @@ modelTypeSelect.addEventListener('change', () => {
     const processor = document.getElementById('processor').value;
     const align = document.getElementById('align').checked;
 
+    if (!file) {
+      progressDiv.innerText = "No file selected.";
+      return;
+    }
+
+    progressDiv.innerText = `Uploading ${file.name}...`;
+
     const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
+    formData.append('file', file);
     formData.append('langs', langs);
     formData.append('original_lang', original_lang);
     formData.append('model', model);
     formData.append('model_type', model_type);
     formData.append('align', align);
     formData.append('processor', processor);
-    console.log("Submitting model_type:", model_type);
-    document.getElementById('progress').innerText = 'Uploading...';
-    document.getElementById('result').innerHTML = '';
 
     try {
       const res = await fetch('/upload', { method: 'POST', body: formData });
       const data = await res.json();
 
       if (!data.job_id) {
-        document.getElementById('progress').innerText = 'Error: No job_id received';
+        progressDiv.innerText = 'Error: No job_id received';
         return;
       }
 
-      document.getElementById('progress').innerText = 'Processing...';
-      await checkStatus(data.job_id);
+      progressDiv.innerText = `Processing ${file.name}...`;
+      await checkStatus(data.job_id, file.name);
     } catch (err) {
       console.error(err);
-      document.getElementById('progress').innerText = 'Upload failed.';
+      progressDiv.innerText = 'Upload failed.';
     }
   };
 
-  async function checkStatus(job_id) {
-  try {
-    const res = await fetch('/status/' + job_id);
-    const data = await res.json();
+  async function checkStatus(job_id, inputFileName) {
+    try {
+      const res = await fetch('/status/' + job_id);
+      const data = await res.json();
 
-    if (data.status === 'done') {
-      let outputHTML = '<p>Download Results:</p>';
+      if (data.status === 'done') {
+        progressDiv.innerHTML = `<span style="color:green;font-weight:bold">Done! (${inputFileName})</span>`;
+        resultsTable.style.display = ''; // show the table if hidden
 
-      // Filter out non-file keys like 'duration_seconds' and 'status'
-      for (const [label, fileName] of Object.entries(data.outputs)) {
-        if (
-          label === "status" ||
-          label === "duration_seconds" ||
-          !fileName ||
-          typeof fileName !== "string"
-        ) continue;  // skip keys that are not files
+        // data.outputs: { label: fullOutputFileName }
+        // Example: { "orig": "myfile_123_output_orig.mp4", "orig_srt": "myfile_123_output_orig.srt", ... }
+        // Show every output in a new row
+        let firstRow = true;
+        for (const [label, fullOutputFileName] of Object.entries(data.outputs)) {
+          // skip if not a real file name
+          if (!fullOutputFileName || typeof fullOutputFileName !== 'string') continue;
 
-        outputHTML += `
-          <div class="output-link">
-            <a href="/download/${fileName}" target="_blank">${label}</a>
-          </div>`;
+          const tr = document.createElement('tr');
+          if (firstRow) {
+            // Input file cell, only once per upload
+            tr.innerHTML = `
+              <td rowspan="${Object.keys(data.outputs).length}">${inputFileName}</td>
+              <td>${label}</td>
+              <td>${fullOutputFileName}</td>
+              <td><a href="/download/${fullOutputFileName}" target="_blank">Download</a></td>
+              <td rowspan="${Object.keys(data.outputs).length}">${data.duration_seconds || ''}</td>
+            `;
+            firstRow = false;
+          } else {
+            // Other outputs for same upload
+            tr.innerHTML = `
+              <td>${label}</td>
+              <td>${fullOutputFileName}</td>
+              <td><a href="/download/${fullOutputFileName}" target="_blank">Download</a></td>
+            `;
+          }
+          resultsTbody.appendChild(tr);
+        }
+      } else if (data.status === 'failed') {
+        progressDiv.innerText = 'Processing failed.';
+      } else {
+        setTimeout(() => checkStatus(job_id, inputFileName), 2000);
       }
-
-      if (data.duration_seconds) {
-        outputHTML += `<p><strong>Processing Time:</strong> ${data.duration_seconds} seconds</p>`;
-      }
-
-      document.getElementById('result').innerHTML = outputHTML;
-      document.getElementById('progress').innerText = 'Done!';
-    } else if (data.status === 'failed') {
-      document.getElementById('progress').innerText = 'Processing failed.';
-    } else {
-      setTimeout(() => checkStatus(job_id), 2000);
+    } catch (err) {
+      console.error(err);
+      progressDiv.innerText = 'Error checking status.';
     }
-  } catch (err) {
-    console.error(err);
-    document.getElementById('progress').innerText = 'Error checking status.';
   }
-}
 });

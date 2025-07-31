@@ -9,10 +9,6 @@ import cv2
 import pytesseract
 from PIL import Image
 
-from app.pipeline.transcriber import FasterWhisperTranscriber, OpenAIWhisperTranscriber
-# from app.pipeline.translator import GoogleTranslate
-from app.pipeline.burner import FFmpegBurner
-
 class AutoSubtitlePipeline:
     def __init__(self, transcriber, burner, translator=None):
         self.transcriber = transcriber
@@ -113,7 +109,7 @@ class AutoSubtitlePipeline:
             "-vf", filter_str,
             "-c:a", "copy", output_video
         ], check=True)
-    def process(self, video_path, output_path_base, output_languages=None, language=None, device=None):
+    def process(self, video_path, output_path_base, output_languages=None, language=None, device=None,align_output=True):
         with tempfile.TemporaryDirectory() as tmpdir:
             masked = self.detect_burned_in_subs(video_path)
             if masked:
@@ -125,7 +121,7 @@ class AutoSubtitlePipeline:
                 video_for_burn = video_path
             audio_path = os.path.join(tmpdir, "audio.wav")
             self.extract_audio(video_for_burn, audio_path)
-            result,src_lang = self.transcriber.transcribe(audio_path, language=language)
+            result,src_lang = self.transcriber.transcribe(audio_path, language=language,align_output=align_output)
             srt_paths = {}
 
             # Original SRT

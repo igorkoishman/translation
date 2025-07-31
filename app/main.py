@@ -2,7 +2,6 @@
 
 import os
 import secrets
-import uuid
 from datetime import datetime
 from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse, HTMLResponse
@@ -14,9 +13,9 @@ from app.pipeline.translator import LocalLLMTranslate
 from app.pipeline.burner import FFmpegBurner
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import sys
 import json
-
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 load_dotenv()
 
 app = FastAPI()
@@ -36,6 +35,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 TEMPLATES_DIR = os.path.join(BASE_DIR2, "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
+
+executor = ThreadPoolExecutor(max_workers=4)  # allow parallel jobs
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -46,15 +48,17 @@ async def upload_video(
         langs: str = Form(""),
         model: str = Form("large"),
         model_type: str = Form("faster-whisper"),
-        processor: str = Form("cpu")
+        processor: str = Form("cpu"),
+        align: str = Form("True"),
+        original_lang: str = Form("")
 ):
-    start_time = datetime.now()
-    # job_id = str(uuid.uuid4())
-    splitterd=file.filename.split('.')
+    splitterd = file.filename.split('.')
     ext = splitterd[-1]
     job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
-    # job_id = splitterd[0]+"_"+str(uuid.uuid4())
     input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
+    align = align or None
+    if not original_lang:
+        original_lang = None
     with open(input_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -62,11 +66,11 @@ async def upload_video(
     model_path = os.path.join(MODEL_DIR, model)
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.{ext}")
     ml_device, video_device = resolve_device(user_device=processor)
-    # Pipeline construction
+
     if model_type == "faster-whisper":
         transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
     else:
-        transcriber = OpenAIWhisperTranscriber(MODEL_DIR,model_type,model, ml_device)
+        transcriber = OpenAIWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
     burner = FFmpegBurner()
 
     translator = None
@@ -74,33 +78,31 @@ async def upload_video(
         translator = LocalLLMTranslate()
     pipeline = AutoSubtitlePipeline(transcriber, burner, translator)
 
-    # Run
-    pipeline.process(
-        video_path=input_path,
-        output_path_base=output_path,
-        output_languages=langs_list,
-        language=None,
-        device=video_device
-    )
+    def run_pipeline():
+        start_time = datetime.now()
+        pipeline.process(
+            video_path=input_path,
+            output_path_base=output_path,
+            output_languages=langs_list,
+            language=original_lang,
+            device=video_device,
+            align_output=align
+        )
+        outputs = {
+            "orig": f"{job_id}_output_orig.{ext}",
+            "orig_srt": f"{job_id}_output_orig.srt",
+        }
+        for lang in langs_list:
+            outputs[lang] = f"{job_id}_output_{lang}.{ext}"
+            outputs[f"{lang}_srt"] = f"{job_id}_output_{lang}.srt"
+        duration = round((datetime.now() - start_time).total_seconds(), 2)
+        outputs["duration_seconds"] = str(duration)
+        with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+            json.dump(outputs, f)
 
-    # Save outputs
-    outputs = {
-        "orig": f"{job_id}_output_orig.{ext}",
-        "orig_srt": f"{job_id}_output_orig.srt",
-    }
-    for lang in langs_list:
-        outputs[lang] = f"{job_id}_output_{lang}.{ext}"
-        outputs[f"{lang}_srt"] = f"{job_id}_output_{lang}.srt"
-    duration = round((datetime.now() - start_time).total_seconds(), 2)
-    outputs["duration_seconds"] = str(duration)
-    with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
-        json.dump(outputs, f)
-    res = {
-        "job_id": job_id,
-        "download_url": f"/download/{job_id}.{ext}",
-        "duration_seconds": duration
-    }
-    return res
+    # 🚩 Do NOT write .status here! Only in run_pipeline
+    asyncio.get_event_loop().run_in_executor(executor, run_pipeline)
+    return {"job_id": job_id}
 
 @app.get("/status/{job_id}")
 def status(job_id: str):

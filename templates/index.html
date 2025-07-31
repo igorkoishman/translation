@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Auto Subtitle Generator</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Auto Subtitle Generator</h1>
+
+    <form id="upload-form" enctype="multipart/form-data">
+      <label for="file-input">Select Video File:</label>
+      <input type="file" name="file" id="file-input" required />
+
+      <label for="langs">Languages (e.g. he ru):</label>
+      <input type="text" name="langs" id="langs" placeholder="Languages (e.g. he ru)" />
+
+      <label for="align">Align Words?</label>
+      <input type="checkbox" name="align" id="align" checked />
+
+      <label for="model_type">Model Type:</label>
+      <select name="model_type" id="model_type" required>
+        <option value="faster-whisper">faster-whisper</option>
+        <option value="openai-whisper">openai-whisper</option>
+      </select>
+        <label for="processor">Processor Type:</label>
+      <select name="processor" id="processor" required>
+        <option value="cpu">cpu</option>
+        <option value="cuda">gpu</option>
+      </select>
+
+      <label for="model">Model:</label>
+      <select name="model" id="model" required></select>
+
+      <button type="submit">Upload &amp; Process</button>
+    </form>
+
+    <div id="progress"></div>
+    <div id="result"></div>
+  </div>
+
+  <script src="/static/js/upload.js"></script>
+</body>
+</html>

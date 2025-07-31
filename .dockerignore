@@ -28,3 +28,5 @@ outputs/
 .dockerignore
 .git
 .gitignore
+model/
+outputs

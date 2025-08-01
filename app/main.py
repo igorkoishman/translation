@@ -1,5 +1,3 @@
-# app/main.py
-
 import os
 import secrets
 from datetime import datetime
@@ -10,12 +8,13 @@ from dotenv import load_dotenv
 from app.auto_subtitles import AutoSubtitlePipeline
 from app.pipeline.transcriber import FasterWhisperTranscriber, OpenAIWhisperTranscriber
 from app.pipeline.translator import LocalLLMTranslate
-from app.pipeline.burner import FFmpegBurner
+from app.pipeline.burner import FFmpegBurner, analyze_media
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+
 load_dotenv()
 
 app = FastAPI()
@@ -35,7 +34,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 TEMPLATES_DIR = os.path.join(BASE_DIR2, "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-
 executor = ThreadPoolExecutor(max_workers=4)  # allow parallel jobs
 
 @app.get("/", response_class=HTMLResponse)
@@ -49,60 +47,184 @@ async def upload_video(
         model: str = Form("large"),
         model_type: str = Form("faster-whisper"),
         processor: str = Form("cpu"),
+        subtitle_burn_type: str = Form("hard"),
         align: str = Form("True"),
-        original_lang: str = Form("")
+        original_lang: str = Form(""),
+        audio_track: int = Form(None),
+        subtitle_track: int = Form(None),
+        use_subtitles_only: bool = Form(False)
 ):
+    global AutoSubtitlePipeline
+    import subprocess
+
     splitterd = file.filename.split('.')
     ext = splitterd[-1]
     job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
     input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
     align = align or None
-    if not original_lang:
-        original_lang = None
+
     with open(input_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
     langs_list = langs.strip().split()
-    model_path = os.path.join(MODEL_DIR, model)
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.{ext}")
     ml_device, video_device = resolve_device(user_device=processor)
+
+    # ---- Helper functions ----
+    def extract_audio(infile, outfile, ffmpeg_index):
+        cmd = [
+            "ffmpeg", "-y", "-i", infile, "-map", f"0:{ffmpeg_index}", "-vn", "-acodec", "pcm_s16le", outfile
+        ]
+        subprocess.run(cmd, check=True)
+
+    def extract_subs(infile, outfile, ffmpeg_index):
+        cmd = [
+            "ffmpeg", "-y", "-i", infile, "-map", f"0:{ffmpeg_index}", outfile
+        ]
+        subprocess.run(cmd, check=True)
+
+    # --- MAIN SUBTITLE-ONLY PIPELINE ---
+    if use_subtitles_only and subtitle_track is not None:
+        analysis = analyze_media(input_path)
+        sub_stream_index = None
+        orig_lang_from_track = None
+        for stream in analysis.get('streams', []):
+            if stream['codec_type'] == 'subtitle' and (str(stream['index']) == str(subtitle_track)):
+                sub_stream_index = stream['index']
+                orig_lang_from_track = stream.get('tags', {}).get('language', None)
+                break
+        if sub_stream_index is None:
+            return {"error": "Subtitle track not found"}
+
+        subtitle_lang = original_lang or orig_lang_from_track or "und"
+        srt_path = os.path.splitext(output_path)[0] + "_orig.srt"
+        extract_subs(input_path, srt_path, sub_stream_index)
+        outputs = {
+            "orig_srt": os.path.basename(srt_path)
+        }
+        burner = FFmpegBurner()
+
+        # Hard-burn original
+        if subtitle_burn_type in ("hard", "both"):
+            out_video_orig = os.path.splitext(output_path)[0] + f"_orig.{ext}"
+            burner.burn(input_path, srt_path, out_video_orig)
+            outputs["orig"] = os.path.basename(out_video_orig)
+        # Soft-mux original (ALWAYS .mkv)
+        if subtitle_burn_type in ("soft", "both"):
+            out_video_soft = os.path.splitext(output_path)[0] + f"_orig_soft.mkv"
+            out_video_soft = mux_srt_into_video(input_path, srt_path, out_video_soft)
+            outputs["orig_soft"] = os.path.basename(out_video_soft)
+        if langs_list:
+            from app.auto_subtitles import AutoSubtitlePipeline, srt
+            for lang in langs_list:
+                translated_srt_path = os.path.splitext(output_path)[0] + f"_{lang}.srt"
+                # Use the pipeline's translate_srt; pass translator if needed
+                AutoSubtitlePipeline.translate_srt(
+                    output_srt=translated_srt_path,
+                    input_srt=srt_path,
+                    src_lang=subtitle_lang,
+                    tgt_lang=lang
+                )
+                outputs[f"{lang}_srt"] = os.path.basename(translated_srt_path)
+                # Hard-burn
+                if subtitle_burn_type in ("hard", "both"):
+                    out_video = os.path.splitext(output_path)[0] + f"_{lang}.{ext}"
+                    burner.burn(input_path, translated_srt_path, out_video)
+                    outputs[lang] = os.path.basename(out_video)
+                # Soft-mux (ALWAYS .mkv)
+                if subtitle_burn_type in ("soft", "both"):
+                    out_video_soft = os.path.splitext(output_path)[0] + f"_{lang}_soft.mkv"
+                    out_video_soft = mux_srt_into_video(input_path, translated_srt_path, out_video_soft)
+                    outputs[f"{lang}_soft"] = os.path.basename(out_video_soft)
+
+        with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+            json.dump(outputs, f)
+        # return {"job_id": job_id}
+        # # Translate, output SRT, and burn/mux for each target language
+        # if langs_list:
+        #     translator = LocalLLMTranslate()
+        #     from app.auto_subtitles import srt
+        #     with open(srt_path, "r", encoding="utf-8") as f:
+        #         subs = list(srt.parse(f.read()))
+        #     for lang in langs_list:
+        #         translated_srt_path = os.path.splitext(output_path)[0] + f"_{lang}.srt"
+        #         translated_subs = []
+        #         for sub in subs:
+        #             text = translator.translate(sub.content, subtitle_lang, lang)
+        #             translated_subs.append(srt.Subtitle(index=sub.index, start=sub.start, end=sub.end, content=text))
+        #         with open(translated_srt_path, "w", encoding="utf-8") as fout:
+        #             fout.write(srt.compose(translated_subs))
+        #         outputs[f"{lang}_srt"] = os.path.basename(translated_srt_path)
+        #         # Hard-burn
+        #         if subtitle_burn_type in ("hard", "both"):
+        #             out_video = os.path.splitext(output_path)[0] + f"_{lang}.{ext}"
+        #             burner.burn(input_path, translated_srt_path, out_video)
+        #             outputs[lang] = os.path.basename(out_video)
+        #         # Soft-mux (ALWAYS .mkv)
+        #         if subtitle_burn_type in ("soft", "both"):
+        #             out_video_soft = os.path.splitext(output_path)[0] + f"_{lang}_soft.mkv"
+        #             out_video_soft = mux_srt_into_video(input_path, translated_srt_path, out_video_soft)
+        #             outputs[f"{lang}_soft"] = os.path.basename(out_video_soft)
+        # with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+        #     json.dump(outputs, f)
+        # return {"job_id": job_id}
+
+    # --- AUDIO-TRACK OR FULL PIPELINE ---
+    # Find actual ffmpeg stream index for audio
+    analysis = analyze_media(input_path)
+    audio_stream_index = None
+    if audio_track is not None:
+        for stream in analysis.get('streams', []):
+            if stream['codec_type'] == 'audio' and (str(stream['index']) == str(audio_track)):
+                audio_stream_index = stream['index']
+                break
+
+    # Only use WAV for transcription; never for burning/muxing!
+    transcription_audio_path = None
+    if audio_stream_index is not None:
+        transcription_audio_path = os.path.splitext(output_path)[0] + "_track.wav"
+        extract_audio(input_path, transcription_audio_path, audio_stream_index)
+    else:
+        transcription_audio_path = input_path  # fallback, will be video file
 
     if model_type == "faster-whisper":
         transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
     else:
         transcriber = OpenAIWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
     burner = FFmpegBurner()
-
-    translator = None
-    if langs_list:
-        translator = LocalLLMTranslate()
+    translator = LocalLLMTranslate() if langs_list else None
     pipeline = AutoSubtitlePipeline(transcriber, burner, translator)
 
     def run_pipeline():
         start_time = datetime.now()
-        pipeline.process(
+        # For transcription, pipeline should use transcription_audio_path if needed, but
+        # for all burning/muxing, always use input_path!
+        outputs = pipeline.process(
             video_path=input_path,
+            audio_path=transcription_audio_path,   # Update process signature if needed!
             output_path_base=output_path,
             output_languages=langs_list,
             language=original_lang,
             device=video_device,
-            align_output=align
+            align_output=align,
+            subtitle_burn_type=subtitle_burn_type,
         )
-        outputs = {
-            "orig": f"{job_id}_output_orig.{ext}",
-            "orig_srt": f"{job_id}_output_orig.srt",
-        }
-        for lang in langs_list:
-            outputs[lang] = f"{job_id}_output_{lang}.{ext}"
-            outputs[f"{lang}_srt"] = f"{job_id}_output_{lang}.srt"
         duration = round((datetime.now() - start_time).total_seconds(), 2)
         outputs["duration_seconds"] = str(duration)
-        with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
-            json.dump(outputs, f)
+        # for lang in langs_list:
+        #     outputs[lang] = f"{job_id}_output_{lang}.{ext}"
+        #     outputs[f"{lang}_srt"] = f"{job_id}_output_{lang}.srt"
+        # duration = round((datetime.now() - start_time).total_seconds(), 2)
+        # outputs["duration_seconds"] = str(duration)
+        # with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+        #     json.dump(outputs, f)
+        # Clean up temp files if needed
+        if transcription_audio_path and os.path.exists(transcription_audio_path) and transcription_audio_path != input_path:
+            os.remove(transcription_audio_path)
 
-    # 🚩 Do NOT write .status here! Only in run_pipeline
     asyncio.get_event_loop().run_in_executor(executor, run_pipeline)
     return {"job_id": job_id}
+
 
 @app.get("/status/{job_id}")
 def status(job_id: str):
@@ -130,27 +252,103 @@ def download_file(output_file: str):
     path = os.path.join(OUTPUT_DIR, output_file)
     return FileResponse(path, media_type="video/mp4", filename=output_file)
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
-
+@app.post("/analyze")
+async def analyze_file(file: UploadFile = File(...)):
+    # Save temp
+    ext = file.filename.split('.')[-1]
+    tmp_path = f"/tmp/{secrets.token_hex(6)}.{ext}"
+    with open(tmp_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    try:
+        analysis = analyze_media(tmp_path)
+        tracks = []
+        for stream in analysis.get('streams', []):
+            track_info = {
+                'index': stream['index'],
+                'type': stream['codec_type'],
+                'codec': stream.get('codec_name'),
+                'lang': stream.get('tags', {}).get('language', 'und'),
+                'default': stream.get('disposition', {}).get('default', 0),
+                'forced': stream.get('disposition', {}).get('forced', 0),
+                'title': stream.get('tags', {}).get('title', ''),
+                'id': stream.get('id', None)
+            }
+            tracks.append(track_info)
+        return {'tracks': tracks}
+    finally:
+        os.remove(tmp_path)
 
 def resolve_device(user_device: str = None):
     import platform
     import torch
 
     system = platform.system()
-
-    # if user_device == "cuda" and torch.cuda.is_available():
-    #     return "cuda", "cuda"
-    # if user_device == "videotoolbox":
-    #     return "cpu", "videotoolbox"
-    # if user_device == "cpu":
-    #     return "cpu", "cpu"
-
-    # Auto-select
     if system == "Darwin":
         return "cpu", "videotoolbox"
     if torch.cuda.is_available():
         return "cuda", "cuda"
     return "cpu", "cpu"
+
+def mux_srt_into_video(video_in, srt_path, video_out):
+    # Output container must support soft subs (MKV always, MP4 with mov_text)
+    import subprocess
+    ext = os.path.splitext(video_out)[1].lower()
+    # For .mkv you can mux srt directly. For .mp4, you need to convert to mov_text.
+    if ext == ".mkv":
+        cmd = [
+            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+            "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
+        ]
+    elif ext == ".mp4":
+        # Convert srt to mov_text for MP4
+        cmd = [
+            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+            "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text", "-map", "0", "-map", "1", video_out
+        ]
+    elif ext == ".avi":
+        # AVI does not support soft subs, use MKV instead
+        video_out = os.path.splitext(video_out)[0] + ".mkv"
+        cmd = [
+            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+            "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
+        ]
+    else:
+        # Default to MKV muxing
+        video_out = os.path.splitext(video_out)[0] + ".mkv"
+        cmd = [
+            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+            "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
+        ]
+    subprocess.run(cmd, check=True)
+    return video_out
+
+def mux_multiple_srts_into_mkv(video_in, srt_paths, video_out):
+    """
+    srt_paths: list of tuples (lang_code, srt_path)
+    """
+    import subprocess
+
+    cmd = ["ffmpeg", "-y", "-i", video_in]
+    # Add all srt files as inputs
+    for _, srt_path in srt_paths:
+        cmd += ["-i", srt_path]
+    cmd += ["-c", "copy"]
+    # For each srt, add a mapping, and assign language/label
+    # First stream is video_in, srt files are inputs 1,2,3...
+    # "-map 0" maps all streams from the original video
+    cmd += ["-map", "0"]
+    for idx, (lang, _) in enumerate(srt_paths):
+        cmd += ["-map", str(idx + 1)]
+    # Subtitle codecs: srt
+    cmd += ["-c:s", "srt"]
+    # Set language for each srt stream
+    for idx, (lang, _) in enumerate(srt_paths):
+        cmd += [f"-metadata:s:s:{idx}", f"language={lang}"]
+    cmd += [video_out]
+
+    subprocess.run(cmd, check=True)
+    return video_out
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, reload=True)

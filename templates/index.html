@@ -8,29 +8,101 @@
 <body>
   <div class="container">
     <h1>Auto Subtitle Generator</h1>
-    <form id="upload-form" enctype="multipart/form-data">
-      <label for="file-input">Select Video File:</label>
-      <input type="file" name="file" id="file-input" required />
-      <label for="langs">Languages (e.g. he ru):</label>
-      <input type="text" name="langs" id="langs" />
-      <label for="original_lang">Original language</label>
-      <input type="text" name="original_lang" id="original_lang" />
-      <label for="align">Align Words?</label>
-      <input type="checkbox" name="align" id="align" checked />
-      <label for="model_type">Model Type:</label>
-      <select name="model_type" id="model_type" required>
-        <option value="faster-whisper">faster-whisper</option>
-        <option value="openai-whisper">openai-whisper</option>
-      </select>
-      <label for="processor">Processor Type:</label>
-      <select name="processor" id="processor" required>
-        <option value="cpu">cpu</option>
-        <option value="cuda">gpu</option>
-      </select>
-      <label for="model">Model:</label>
-      <select name="model" id="model" required></select>
-      <button type="submit">Upload &amp; Process</button>
-    </form>
+ <form id="upload-form" enctype="multipart/form-data">
+  <!-- Row: File -->
+  <label for="file-input">Select Video File:</label>
+  <input type="file" name="file" id="file-input" required />
+
+  <!-- Row: Track selectors, spans both columns as a row -->
+  <div id="track-selectors" style="display:none; grid-column: 1 / span 2;">
+    <label for="audio-track">Audio Track for Transcription:</label>
+    <select id="audio-track" name="audio_track"></select>
+    <label for="subtitle-track">Subtitle Track (optional):</label>
+    <select id="subtitle-track" name="subtitle_track">
+      <option value="">None</option>
+    </select>
+    <label style="grid-column: 1 / span 2;">
+      <input type="checkbox" id="use-subtitles-only" name="use_subtitles_only" />
+      Use subtitle track only (skip transcription)
+    </label>
+  </div>
+
+  <label for="langs">Languages (e.g. he ru):</label>
+  <input type="text" name="langs" id="langs" />
+
+  <label for="original_lang">Original language</label>
+  <input type="text" name="original_lang" id="original_lang" />
+
+  <label for="align">Align Words?</label>
+  <input type="checkbox" name="align" id="align" checked />
+
+  <label for="subtitle_burn_type">Subtitle type:</label>
+  <select name="subtitle_burn_type" id="subtitle_burn_type" required>
+    <option value="hard">Hard Burn (always visible)</option>
+    <option value="soft">Soft Subtitle (selectable in player)</option>
+    <option value="both">Both</option>
+  </select>
+
+  <label for="model_type">Model Type:</label>
+  <select name="model_type" id="model_type" required>
+    <option value="faster-whisper">faster-whisper</option>
+    <option value="openai-whisper">openai-whisper</option>
+  </select>
+
+  <label for="processor">Processor Type:</label>
+  <select name="processor" id="processor" required>
+    <option value="cpu">cpu</option>
+    <option value="cuda">gpu</option>
+  </select>
+
+  <label for="model">Model:</label>
+  <select name="model" id="model" required></select>
+
+  <button type="submit" style="grid-column: 1 / span 2;">Upload &amp; Process</button>
+</form>
+
+
+<!--    <form id="upload-form" enctype="multipart/form-data">-->
+<!--      <label for="file-input">Select Video File:</label>-->
+<!--      <input type="file" name="file" id="file-input" required />-->
+<!--      <div id="track-selectors" style="display:none;">-->
+<!--  <label for="audio-track">Audio Track for Transcription:</label>-->
+<!--  <select id="audio-track" name="audio_track"></select>-->
+<!--  <label for="subtitle-track">Subtitle Track (optional):</label>-->
+<!--  <select id="subtitle-track" name="subtitle_track">-->
+<!--    <option value="">None</option>-->
+<!--  </select>-->
+<!--  <label>-->
+<!--    <input type="checkbox" id="use-subtitles-only" name="use_subtitles_only" />-->
+<!--    Use subtitle track only (skip transcription)-->
+<!--  </label>-->
+<!--</div>-->
+<!--      <label for="langs">Languages (e.g. he ru):</label>-->
+<!--      <input type="text" name="langs" id="langs" />-->
+<!--      <label for="original_lang">Original language</label>-->
+<!--      <input type="text" name="original_lang" id="original_lang" />-->
+<!--      <label for="align">Align Words?</label>-->
+<!--      <label for="subtitle_burn_type">Subtitle type:</label>-->
+<!--        <select name="subtitle_burn_type" id="subtitle_burn_type" required>-->
+<!--          <option value="hard">Hard Burn (always visible)</option>-->
+<!--          <option value="soft">Soft Subtitle (selectable in player)</option>-->
+<!--          <option value="both">Both</option>-->
+<!--        </select>-->
+<!--      <input type="checkbox" name="align" id="align" checked />-->
+<!--      <label for="model_type">Model Type:</label>-->
+<!--      <select name="model_type" id="model_type" required>-->
+<!--        <option value="faster-whisper">faster-whisper</option>-->
+<!--        <option value="openai-whisper">openai-whisper</option>-->
+<!--      </select>-->
+<!--      <label for="processor">Processor Type:</label>-->
+<!--      <select name="processor" id="processor" required>-->
+<!--        <option value="cpu">cpu</option>-->
+<!--        <option value="cuda">gpu</option>-->
+<!--      </select>-->
+<!--      <label for="model">Model:</label>-->
+<!--      <select name="model" id="model" required></select>-->
+<!--      <button type="submit">Upload &amp; Process</button>-->
+<!--    </form>-->
     <div id="progress-list"></div>
     <div style="margin-top:2em;">
       <table id="results-table" border="1" style="width:100%; display:none;">

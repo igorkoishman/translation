@@ -6,6 +6,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const resultsTable = document.getElementById('results-table');
   const resultsTbody = resultsTable.querySelector('tbody');
 
+  // Track selector elements
+  // Make sure these exist in your HTML as shown previously!
+  const trackSelectors = document.getElementById('track-selectors');
+  const audioTrackSelect = document.getElementById('audio-track');
+  const subtitleTrackSelect = document.getElementById('subtitle-track');
+  const useSubtitlesOnly = document.getElementById('use-subtitles-only');
+
   const modelsByBackend = {
     'faster-whisper': ['tiny', 'base', 'small', 'medium', 'large-v1', 'large-v2', 'large-v3', 'large'],
     'openai-whisper': [
@@ -29,10 +36,59 @@ document.addEventListener('DOMContentLoaded', () => {
   modelTypeSelect.addEventListener('change', updateModelOptions);
   updateModelOptions();
 
+  // ---- TRACK ANALYSIS LOGIC ----
+  const fileInput = document.getElementById('file-input');
+  fileInput.addEventListener('change', async (e) => {
+    const file = fileInput.files[0];
+    if (!file) {
+      trackSelectors.style.display = "none";
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // Reset dropdowns and hide selectors until analysis is complete
+    audioTrackSelect.innerHTML = '';
+    subtitleTrackSelect.innerHTML = '<option value="">None</option>';
+    useSubtitlesOnly.checked = false;
+    trackSelectors.style.display = "none";
+
+    try {
+      let res = await fetch('/analyze', {method: 'POST', body: formData});
+      let data = await res.json();
+      let audioCount = 0, subCount = 0;
+      data.tracks.forEach(track => {
+        if (track.type === 'audio') {
+          const label = `#${track.index} - ${track.lang || 'und'} [${track.codec}]${track.default ? ' (default)' : ''}`;
+          const opt = document.createElement('option');
+          opt.value = track.index;
+          opt.textContent = label;
+          audioTrackSelect.appendChild(opt);
+          audioCount++;
+        } else if (track.type === 'subtitle') {
+          const label = `#${track.index} - ${track.lang || 'und'} [${track.codec}]${track.default ? ' (default)' : ''}`;
+          const opt = document.createElement('option');
+          opt.value = track.index;
+          opt.textContent = label;
+          subtitleTrackSelect.appendChild(opt);
+          subCount++;
+        }
+      });
+      if (audioCount + subCount > 0) {
+        trackSelectors.style.display = "";
+      } else {
+        trackSelectors.style.display = "none";
+      }
+    } catch (err) {
+      console.error("Track analysis failed:", err);
+      trackSelectors.style.display = "none";
+    }
+  });
+
+  // ---- FORM SUBMIT LOGIC ----
   form.onsubmit = async (e) => {
     e.preventDefault();
 
-    const fileInput = document.getElementById('file-input');
     const file = fileInput.files[0];
     const langs = document.getElementById('langs').value;
     const original_lang = document.getElementById('original_lang').value;
@@ -40,6 +96,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const model_type = modelTypeSelect.value;
     const processor = document.getElementById('processor').value;
     const align = document.getElementById('align').checked;
+    const burnType = document.getElementById('subtitle_burn_type').value;
+
+
+    // Track selections
+    const audioTrack = audioTrackSelect && audioTrackSelect.value ? audioTrackSelect.value : '';
+    const subtitleTrack = subtitleTrackSelect && subtitleTrackSelect.value ? subtitleTrackSelect.value : '';
+    const useSubsOnly = useSubtitlesOnly && useSubtitlesOnly.checked;
 
     if (!file) {
       let errorDiv = document.createElement('div');
@@ -71,6 +134,11 @@ document.addEventListener('DOMContentLoaded', () => {
     formData.append('model_type', model_type);
     formData.append('align', align);
     formData.append('processor', processor);
+    formData.append('subtitle_burn_type', burnType);
+    // Add track fields if present
+    if (audioTrack !== '') formData.append('audio_track', audioTrack);
+    if (subtitleTrack !== '') formData.append('subtitle_track', subtitleTrack);
+    if (useSubsOnly) formData.append('use_subtitles_only', useSubsOnly);
 
     try {
       const res = await fetch('/upload', { method: 'POST', body: formData });
@@ -81,13 +149,10 @@ document.addEventListener('DOMContentLoaded', () => {
         thisProgress.style.color = "red";
         return;
       }
-//      let jobs = JSON.parse(localStorage.getItem('submittedJobs') || '[]');
-//      jobs.push({job_id: data.job_id, filename: file.name});
-//      localStorage.setItem('submittedJobs', JSON.stringify(jobs));
       thisProgress.innerText = `Processing ${file.name}...`;
       await checkStatus(data.job_id, file.name, thisProgress);
     } catch (err) {
-      console.error(err);3
+      console.error(err);
       thisProgress.innerText = 'Upload failed.';
       thisProgress.style.color = "red";
     }
@@ -138,22 +203,3 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 });
-//window.addEventListener('DOMContentLoaded', () => {
-//  const jobs = JSON.parse(localStorage.getItem('submittedJobs') || '[]');
-//  for (const {job_id, filename} of jobs) {
-//    // Recreate per-file progress bar (optional: show "Restoring...")
-//    let safeId = "progress_" + filename.replace(/[^a-zA-Z0-9\-_\.]/g, "_");
-//    let thisProgress = document.getElementById(safeId);
-//    if (!thisProgress) {
-//      thisProgress = document.createElement('div');
-//      thisProgress.id = safeId;
-//      thisProgress.style.fontWeight = "bold";
-//      thisProgress.style.color = "gray";
-//      thisProgress.style.fontSize = "2em";
-//      thisProgress.style.marginBottom = "8px";
-//      thisProgress.innerText = `Restoring status for ${filename}...`;
-//      document.getElementById('progress-list').appendChild(thisProgress);
-//    }
-//    checkStatus(job_id, filename, thisProgress);
-//  }
-//});

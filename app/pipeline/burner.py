@@ -1,5 +1,6 @@
 from .base import SubtitleBurner
-
+import subprocess
+import json
 
 
 def get_video_height(video_path):
@@ -61,3 +62,13 @@ class FFmpegBurner(SubtitleBurner):
                 "-c:a", "copy", output_path
             ]
         subprocess.run(cmd, check=True)
+
+def analyze_media(file_path):
+    cmd = [
+        'ffprobe', '-v', 'quiet', '-print_format', 'json',
+        '-show_format', '-show_streams', '-show_chapters', file_path
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError("ffprobe failed")
+    return json.loads(proc.stdout)

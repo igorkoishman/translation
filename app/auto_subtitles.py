@@ -9,11 +9,13 @@ import cv2
 import pytesseract
 from PIL import Image
 
+from app.pipeline.FFmpegBurner import mux_multiple_srts_into_mkv, burn
+
+
 class AutoSubtitlePipeline:
-    def __init__(self, transcriber, burner, translator=None):
+    def __init__(self, transcriber, translator=None):
         self.transcriber = transcriber
         self.translator = translator
-        self.burner = burner
 
     @staticmethod
     def extract_audio(video_path, audio_path):
@@ -97,14 +99,14 @@ class AutoSubtitlePipeline:
         print(f"Detected subtitle-like text in {found_text} of {frames_to_check} frames.")
         return found_text >= min_frames_with_text
 
-    def mask_subtitle_area(self, input_video, output_video, percent=0.15, color="black"):
-        import subprocess
-        filter_str = f"drawbox=y=ih*(1-{percent}):w=iw:h=ih*{percent}:color={color}@1.0:t=fill"
-        subprocess.run([
-            "ffmpeg", "-y", "-i", input_video,
-            "-vf", filter_str,
-            "-c:a", "copy", output_video
-        ], check=True)
+    # def mask_subtitle_area(self, input_video, output_video, percent=0.15, color="black"):
+    #     import subprocess
+    #     filter_str = f"drawbox=y=ih*(1-{percent}):w=iw:h=ih*{percent}:color={color}@1.0:t=fill"
+    #     subprocess.run([
+    #         "ffmpeg", "-y", "-i", input_video,
+    #         "-vf", filter_str,
+    #         "-c:a", "copy", output_video
+    #     ], check=True)
 
     # def process(
     #         self, video_path, audio_path, output_path_base,
@@ -183,7 +185,6 @@ class AutoSubtitlePipeline:
             output_languages=None, language=None, device=None,
             align_output=True, subtitle_burn_type="hard"
     ):
-        from app.main import mux_srt_into_video, mux_multiple_srts_into_mkv  # Make sure you import
 
         output_files = {}
 
@@ -229,14 +230,14 @@ class AutoSubtitlePipeline:
             if subtitle_burn_type in ("hard", "both"):
                 # Hard-burn original
                 out_video_orig = f"{base_out}_orig{ext}"
-                self.burner.burn(video_for_burn, srt_orig, out_video_orig, device=device, masked=masked)
+                burn(video_for_burn, srt_orig, out_video_orig, device=device, masked=masked)
                 output_files["orig"] = os.path.basename(out_video_orig)
                 # Hard-burn translations
                 if output_languages:
                     for lang in output_languages:
                         srt_path = srt_paths[lang]
                         out_video = f"{base_out}_{lang}{ext}"
-                        self.burner.burn(video_for_burn, srt_path, out_video, device=device, masked=masked)
+                        burn(video_for_burn, srt_path, out_video, device=device, masked=masked)
                         output_files[lang] = os.path.basename(out_video)
 
             # --- Soft-mux: make one MKV with ALL SRTs ---
@@ -263,26 +264,4 @@ class AutoSubtitlePipeline:
 
             return output_files
 
-    def translate_srt(self, input_srt, output_srt, src_lang, tgt_lang):
-        """
-        Translate an SRT file using the current translator, saving to output_srt.
-        """
-        if not self.translator:
-            raise ValueError("No translator set for pipeline.")
-        with open(input_srt, "r", encoding="utf-8") as f:
-            subs = list(srt.parse(f.read()))
-        translated_subs = []
-        for sub in subs:
-            try:
-                text = self.translator.translate(sub.content, src_lang, tgt_lang)
-            except Exception as e:
-                print(f"Translation error: {e}")
-                text = sub.content
-            translated_subs.append(srt.Subtitle(
-                index=sub.index,
-                start=sub.start,
-                end=sub.end,
-                content=text
-            ))
-        with open(output_srt, "w", encoding="utf-8") as f:
-            f.write(srt.compose(translated_subs))
+

@@ -5,10 +5,10 @@ from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse, HTMLResponse
 import shutil
 from dotenv import load_dotenv
-from app.auto_subtitles import AutoSubtitlePipeline
+
+from app.pipeline.FFmpegBurner import burn, mux_multiple_srts_into_mkv, analyze_media
 from app.pipeline.transcriber import FasterWhisperTranscriber, OpenAIWhisperTranscriber
 from app.pipeline.translator import LocalLLMTranslate
-from app.pipeline.burner import FFmpegBurner, analyze_media
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import json
@@ -36,6 +36,7 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 executor = ThreadPoolExecutor(max_workers=4)  # allow parallel jobs
 
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -61,14 +62,13 @@ async def upload_video(
     job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
     input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
     align = align or None
-
     with open(input_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
     langs_list = langs.strip().split()
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.{ext}")
     ml_device, video_device = resolve_device(user_device=processor)
-
+    translator = LocalLLMTranslate() if langs_list else None
     # --- MAIN SUBTITLE-ONLY PIPELINE ---
     if use_subtitles_only and subtitle_track is not None:
         analysis = analyze_media(input_path)
@@ -96,21 +96,20 @@ async def upload_video(
         outputs = {
             "orig_srt": os.path.basename(srt_path)
         }
-        burner = FFmpegBurner()
+
 
         # Hard-burn original
         if subtitle_burn_type in ("hard", "both"):
             out_video_orig = os.path.splitext(output_path)[0] + f"_orig.{ext}"
-            burner.burn(input_path, srt_path, out_video_orig)
+            burn(input_path, srt_path, out_video_orig)
             outputs["orig"] = os.path.basename(out_video_orig)
 
         # Prepare for multi-soft
         srt_list = [("und", srt_path)]
         if langs_list:
-            from app.auto_subtitles import AutoSubtitlePipeline, srt
             for lang in langs_list:
                 translated_srt_path = os.path.splitext(output_path)[0] + f"_{lang}.srt"
-                AutoSubtitlePipeline.translate_srt(
+                translator.translate_srt(
                     output_srt=translated_srt_path,
                     input_srt=srt_path,
                     src_lang=subtitle_lang,
@@ -121,15 +120,15 @@ async def upload_video(
                 # Hard-burn
                 if subtitle_burn_type in ("hard", "both"):
                     out_video = os.path.splitext(output_path)[0] + f"_{lang}.{ext}"
-                    burner.burn(input_path, translated_srt_path, out_video)
+                    burn(input_path, translated_srt_path, out_video)
                     outputs[lang] = os.path.basename(out_video)
 
         # Soft-mux *all* SRTs into one MKV
         if subtitle_burn_type in ("soft", "both"):
             multi_soft_mkv = os.path.splitext(output_path)[0] + "_multi_soft.mkv"
-            mux_multiple_srts_into_mkv(input_path, srt_list, multi_soft_mkv)
+            filtered_srt_list = [item for item in srt_list if '_orig' not in item[1]]
+            mux_multiple_srts_into_mkv(input_path, filtered_srt_list, multi_soft_mkv)
             outputs["multi_soft"] = os.path.basename(multi_soft_mkv)
-
         with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
             json.dump(outputs, f)
         return {"job_id": job_id}
@@ -161,10 +160,10 @@ async def upload_video(
         transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
     else:
         transcriber = OpenAIWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
-    burner = FFmpegBurner()
-    translator = LocalLLMTranslate() if langs_list else None
+
+
     from app.auto_subtitles import AutoSubtitlePipeline
-    pipeline = AutoSubtitlePipeline(transcriber, burner, translator)
+    pipeline = AutoSubtitlePipeline(transcriber, translator)
 
     def run_pipeline():
         start_time = datetime.now()
@@ -253,65 +252,65 @@ def resolve_device(user_device: str = None):
         return "cuda", "cuda"
     return "cpu", "cpu"
 
-def mux_srt_into_video(video_in, srt_path, video_out):
-    # Output container must support soft subs (MKV always, MP4 with mov_text)
-    import subprocess
-    ext = os.path.splitext(video_out)[1].lower()
-    # For .mkv you can mux srt directly. For .mp4, you need to convert to mov_text.
-    if ext == ".mkv":
-        cmd = [
-            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-            "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
-        ]
-    elif ext == ".mp4":
-        # Convert srt to mov_text for MP4
-        cmd = [
-            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-            "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text", "-map", "0", "-map", "1", video_out
-        ]
-    elif ext == ".avi":
-        # AVI does not support soft subs, use MKV instead
-        video_out = os.path.splitext(video_out)[0] + ".mkv"
-        cmd = [
-            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-            "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
-        ]
-    else:
-        # Default to MKV muxing
-        video_out = os.path.splitext(video_out)[0] + ".mkv"
-        cmd = [
-            "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-            "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
-        ]
-    subprocess.run(cmd, check=True)
-    return video_out
-
-def mux_multiple_srts_into_mkv(video_in, srt_paths, video_out):
-    """
-    srt_paths: list of tuples (lang_code, srt_path)
-    """
-    import subprocess
-
-    cmd = ["ffmpeg", "-y", "-i", video_in]
-    # Add all srt files as inputs
-    for _, srt_path in srt_paths:
-        cmd += ["-i", srt_path]
-    cmd += ["-c", "copy"]
-    # For each srt, add a mapping, and assign language/label
-    # First stream is video_in, srt files are inputs 1,2,3...
-    # "-map 0" maps all streams from the original video
-    cmd += ["-map", "0"]
-    for idx, (lang, _) in enumerate(srt_paths):
-        cmd += ["-map", str(idx + 1)]
-    # Subtitle codecs: srt
-    cmd += ["-c:s", "srt"]
-    # Set language for each srt stream
-    for idx, (lang, _) in enumerate(srt_paths):
-        cmd += [f"-metadata:s:s:{idx}", f"language={lang}"]
-    cmd += [video_out]
-
-    subprocess.run(cmd, check=True)
-    return video_out
+# def mux_srt_into_video(video_in, srt_path, video_out):
+#     # Output container must support soft subs (MKV always, MP4 with mov_text)
+#     import subprocess
+#     ext = os.path.splitext(video_out)[1].lower()
+#     # For .mkv you can mux srt directly. For .mp4, you need to convert to mov_text.
+#     if ext == ".mkv":
+#         cmd = [
+#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+#             "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
+#         ]
+#     elif ext == ".mp4":
+#         # Convert srt to mov_text for MP4
+#         cmd = [
+#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+#             "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text", "-map", "0", "-map", "1", video_out
+#         ]
+#     elif ext == ".avi":
+#         # AVI does not support soft subs, use MKV instead
+#         video_out = os.path.splitext(video_out)[0] + ".mkv"
+#         cmd = [
+#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+#             "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
+#         ]
+#     else:
+#         # Default to MKV muxing
+#         video_out = os.path.splitext(video_out)[0] + ".mkv"
+#         cmd = [
+#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
+#             "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
+#         ]
+#     subprocess.run(cmd, check=True)
+#     return video_out
+#
+# def mux_multiple_srts_into_mkv(video_in, srt_paths, video_out):
+#     """
+#     srt_paths: list of tuples (lang_code, srt_path)
+#     """
+#     import subprocess
+#
+#     cmd = ["ffmpeg", "-y", "-i", video_in]
+#     # Add all srt files as inputs
+#     for _, srt_path in srt_paths:
+#         cmd += ["-i", srt_path]
+#     cmd += ["-c", "copy"]
+#     # For each srt, add a mapping, and assign language/label
+#     # First stream is video_in, srt files are inputs 1,2,3...
+#     # "-map 0" maps all streams from the original video
+#     cmd += ["-map", "0"]
+#     for idx, (lang, _) in enumerate(srt_paths):
+#         cmd += ["-map", str(idx + 1)]
+#     # Subtitle codecs: srt
+#     cmd += ["-c:s", "srt"]
+#     # Set language for each srt stream
+#     for idx, (lang, _) in enumerate(srt_paths):
+#         cmd += [f"-metadata:s:s:{idx}", f"language={lang}"]
+#     cmd += [video_out]
+#
+#     subprocess.run(cmd, check=True)
+#     return video_out
 
 if __name__ == "__main__":
     import uvicorn

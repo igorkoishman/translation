@@ -1,3 +1,5 @@
+import srt
+
 from .base import Translator
 from transformers import pipeline as hf_pipeline
 
@@ -48,3 +50,21 @@ class LocalLLMTranslate(Translator):
             f"Could not load any HuggingFace model for {src_lang}→{target_lang}. "
             f"Tried: {attempts}"
         )
+    def translate_srt(self, input_srt, output_srt, src_lang, tgt_lang):
+        with open(input_srt, "r", encoding="utf-8") as f:
+            subs = list(srt.parse(f.read()))
+        translated_subs = []
+        for sub in subs:
+            try:
+                text = self.translate(sub.content, src_lang, tgt_lang)
+            except Exception as e:
+                print(f"Translation error: {e}")
+                text = sub.content
+            translated_subs.append(srt.Subtitle(
+                index=sub.index,
+                start=sub.start,
+                end=sub.end,
+                content=text
+            ))
+        with open(output_srt, "w", encoding="utf-8") as f:
+            f.write(srt.compose(translated_subs))

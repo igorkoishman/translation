@@ -183,7 +183,7 @@ class AutoSubtitlePipeline:
     def process(
             self, video_path, audio_path, output_path_base,
             output_languages=None, language=None, device=None,
-            align_output=True, subtitle_burn_type="hard"
+            align_output=True, subtitle_burn_type="hard",translation_model_path=None
     ):
 
         output_files = {}

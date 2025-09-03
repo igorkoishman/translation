@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from app.pipeline.FFmpegBurner import burn, mux_multiple_srts_into_mkv, analyze_media
 from app.pipeline.transcriber import FasterWhisperTranscriber, OpenAIWhisperTranscriber
-from app.pipeline.translator import LocalLLMTranslate
+from app.pipeline.translator import LocalLLMTranslate, preload_models, NLLBTranslate, M2M100Translate
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import json
@@ -33,7 +33,9 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 TEMPLATES_DIR = os.path.join(BASE_DIR2, "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
-
+translator3 = LocalLLMTranslate(MODEL_DIR)
+translator2 = NLLBTranslate(MODEL_DIR)
+translator = M2M100Translate(MODEL_DIR)
 executor = ThreadPoolExecutor(max_workers=4)  # allow parallel jobs
 
 
@@ -68,7 +70,7 @@ async def upload_video(
     langs_list = langs.strip().split()
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.{ext}")
     ml_device, video_device = resolve_device(user_device=processor)
-    translator = LocalLLMTranslate() if langs_list else None
+    # translator = LocalLLMTranslate(MODEL_DIR) if langs_list else None
     # --- MAIN SUBTITLE-ONLY PIPELINE ---
     if use_subtitles_only and subtitle_track is not None:
         analysis = analyze_media(input_path)
@@ -175,7 +177,7 @@ async def upload_video(
             language=original_lang,
             device=video_device,
             align_output=align,
-            subtitle_burn_type=subtitle_burn_type,
+            subtitle_burn_type=subtitle_burn_type,translation_model_path=MODEL_DIR
         )
         duration = round((datetime.now() - start_time).total_seconds(), 2)
         result_files["duration_seconds"] = str(duration)
@@ -314,4 +316,5 @@ def resolve_device(user_device: str = None):
 
 if __name__ == "__main__":
     import uvicorn
+    preload_models(MODEL_DIR)
     uvicorn.run("app.main:app", host="0.0.0.0", port=8080, reload=True)

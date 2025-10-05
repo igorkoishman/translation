@@ -9,11 +9,13 @@ import cv2
 import pytesseract
 from PIL import Image
 
+from app.pipeline.FFmpegBurner import mux_multiple_srts_into_mkv, burn
+
+
 class AutoSubtitlePipeline:
-    def __init__(self, transcriber, burner, translator=None):
+    def __init__(self, transcriber, translator=None):
         self.transcriber = transcriber
         self.translator = translator
-        self.burner = burner
 
     @staticmethod
     def extract_audio(video_path, audio_path):
@@ -24,9 +26,8 @@ class AutoSubtitlePipeline:
             audio_path
         ], check=True)
 
-    def create_srt(self, segments,src_lang, srt_path, to_language=None, do_translate=False, max_chars=80, max_lines=2,
-                   max_duration=5.0):
-
+    def create_srt(self, segments, src_lang, srt_path, to_language=None, do_translate=False,
+                   max_chars=80, max_lines=2, max_duration=5.0):
         subs, idx = [], 1
         for seg in segments:
             start, end = seg.get('start'), seg.get('end')
@@ -35,8 +36,7 @@ class AutoSubtitlePipeline:
                 continue
             if do_translate and self.translator and to_language:
                 try:
-                    text = self.translator.translate(text, src_lang,to_language)
-                    # text = self.translator.translate(text, to_language,)
+                    text = self.translator.translate(text, src_lang, to_language)
                 except Exception as e:
                     print(f"Translation error: {e}")
             seg_duration = end - start
@@ -87,29 +87,107 @@ class AutoSubtitlePipeline:
 
             # Filter out very short, single words/numbers, or non-subtitle noise
             if (
-                    text
-                    and len(text) >= min_line_length
-                    and re.search(r'\s', text)  # must contain a space (likely a sentence)
-                    and len(text.split()) > 1  # more than one word
-                    and len(text) < 100  # ignore unlikely long texts
+                text
+                and len(text) >= min_line_length
+                and re.search(r'\s', text)  # must contain a space (likely a sentence)
+                and len(text.split()) > 1  # more than one word
+                and len(text) < 100  # ignore unlikely long texts
             ):
                 found_text += 1
-                # Uncomment to debug actual detected text
-                # print(f"OCR at frame {idx}: {repr(text)}")
 
         cap.release()
         print(f"Detected subtitle-like text in {found_text} of {frames_to_check} frames.")
         return found_text >= min_frames_with_text
 
-    def mask_subtitle_area(self, input_video, output_video, percent=0.15, color="black"):
-        import subprocess
-        filter_str = f"drawbox=y=ih*(1-{percent}):w=iw:h=ih*{percent}:color={color}@1.0:t=fill"
-        subprocess.run([
-            "ffmpeg", "-y", "-i", input_video,
-            "-vf", filter_str,
-            "-c:a", "copy", output_video
-        ], check=True)
-    def process(self, video_path, output_path_base, output_languages=None, language=None, device=None,align_output=True):
+    # def mask_subtitle_area(self, input_video, output_video, percent=0.15, color="black"):
+    #     import subprocess
+    #     filter_str = f"drawbox=y=ih*(1-{percent}):w=iw:h=ih*{percent}:color={color}@1.0:t=fill"
+    #     subprocess.run([
+    #         "ffmpeg", "-y", "-i", input_video,
+    #         "-vf", filter_str,
+    #         "-c:a", "copy", output_video
+    #     ], check=True)
+
+    # def process(
+    #         self, video_path, audio_path, output_path_base,
+    #         output_languages=None, language=None, device=None,
+    #         align_output=True, subtitle_burn_type="hard"
+    # ):
+    #     """
+    #     Processes subtitles for a video file:
+    #     - hard: burn subs into video
+    #     - soft: mux .srt as soft subs (in .mkv)
+    #     - both: do both
+    #     """
+    #     from app.main import mux_srt_into_video  # Ensure this is imported
+    #
+    #     with tempfile.TemporaryDirectory() as tmpdir:
+    #         masked = self.detect_burned_in_subs(video_path)
+    #         if masked:
+    #             print("Burned-in subtitles detected. Masking area before burning new subtitles.")
+    #             masked_path = os.path.join(tmpdir, "masked.mp4")
+    #             self.mask_subtitle_area(video_path, masked_path, percent=0.25)
+    #             video_for_burn = masked_path
+    #         else:
+    #             video_for_burn = video_path
+    #
+    #         audio_for_transcription = audio_path or video_for_burn
+    #         if not (audio_for_transcription.endswith('.wav') and os.path.exists(audio_for_transcription)):
+    #             audio_temp_path = os.path.join(tmpdir, "audio.wav")
+    #             self.extract_audio(video_for_burn, audio_temp_path)
+    #             audio_for_transcription = audio_temp_path
+    #
+    #         result, src_lang = self.transcriber.transcribe(
+    #             audio_for_transcription, language=language, align_output=align_output
+    #         )
+    #         srt_paths = {}
+    #         # Original SRT
+    #         srt_orig = os.path.join(tmpdir, "subtitles_orig.srt")
+    #         self.create_srt(result['segments'], src_lang=src_lang, srt_path=srt_orig)
+    #         srt_paths["orig"] = srt_orig
+    #         _, ext = os.path.splitext(video_for_burn)
+    #
+    #         # --- Handle original subtitles (non-translated) ---
+    #         base_out = os.path.splitext(output_path_base)[0]
+    #         if subtitle_burn_type in ("hard", "both"):
+    #             out_video_orig = f"{base_out}_orig{ext}"
+    #             self.burner.burn(video_for_burn, srt_orig, out_video_orig, device=device, masked=masked)
+    #         if subtitle_burn_type in ("soft", "both"):
+    #             out_video_orig_soft = f"{base_out}_orig_soft.mkv"
+    #             mux_srt_into_video(video_for_burn, srt_orig, out_video_orig_soft)
+    #
+    #
+    #         # --- Handle translations ---
+    #         if output_languages:
+    #             for lang in output_languages:
+    #                 srt_path = os.path.join(tmpdir, f"subtitles_{lang}.srt")
+    #                 self.create_srt(
+    #                     result['segments'], src_lang=src_lang,
+    #                     srt_path=srt_path, to_language=lang, do_translate=True
+    #                 )
+    #                 srt_paths[lang] = srt_path
+    #
+    #                 if subtitle_burn_type in ("hard", "both"):
+    #                     out_video = f"{base_out}_{lang}{ext}"
+    #                     self.burner.burn(video_for_burn, srt_path, out_video, device=device, masked=masked)
+    #                 if subtitle_burn_type in ("soft", "both"):
+    #                     out_video_soft = f"{base_out}_{lang}_soft.mkv"
+    #                     mux_srt_into_video(video_for_burn, srt_path, out_video_soft)
+    #
+    #         # Move SRTs to output location
+    #         for lang, path in srt_paths.items():
+    #             final_srt_path = f"{base_out}_{lang}.srt"
+    #             shutil.move(path, final_srt_path)
+    #
+    #         return True
+    def process(
+            self, video_path, audio_path, output_path_base,
+            output_languages=None, language=None, device=None,
+            align_output=True, subtitle_burn_type="hard",translation_model_path=None
+    ):
+
+        output_files = {}
+
         with tempfile.TemporaryDirectory() as tmpdir:
             masked = self.detect_burned_in_subs(video_path)
             if masked:
@@ -119,30 +197,71 @@ class AutoSubtitlePipeline:
                 video_for_burn = masked_path
             else:
                 video_for_burn = video_path
-            audio_path = os.path.join(tmpdir, "audio.wav")
-            self.extract_audio(video_for_burn, audio_path)
-            result,src_lang = self.transcriber.transcribe(audio_path, language=language,align_output=align_output)
+
+            audio_for_transcription = audio_path or video_for_burn
+            if not (audio_for_transcription.endswith('.wav') and os.path.exists(audio_for_transcription)):
+                audio_temp_path = os.path.join(tmpdir, "audio.wav")
+                self.extract_audio(video_for_burn, audio_temp_path)
+                audio_for_transcription = audio_temp_path
+
+            result, src_lang = self.transcriber.transcribe(
+                audio_for_transcription, language=language, align_output=align_output
+            )
             srt_paths = {}
 
-            # Original SRT
+            # --- Create all SRTs first ---
             srt_orig = os.path.join(tmpdir, "subtitles_orig.srt")
-            self.create_srt(result['segments'],src_lang=src_lang, srt_path=srt_orig)
+            self.create_srt(result['segments'], src_lang=src_lang, srt_path=srt_orig)
             srt_paths["orig"] = srt_orig
-            _, ext = os.path.splitext(video_path)
+            _, ext = os.path.splitext(video_for_burn)
+            base_out = os.path.splitext(output_path_base)[0]
 
-            # Translate + burn
+            # --- Handle translations ---
             if output_languages:
                 for lang in output_languages:
                     srt_path = os.path.join(tmpdir, f"subtitles_{lang}.srt")
-                    self.create_srt(result['segments'],src_lang=src_lang, srt_path=srt_path, to_language=lang, do_translate=True)
+                    self.create_srt(
+                        result['segments'], src_lang=src_lang,
+                        srt_path=srt_path, to_language=lang, do_translate=True
+                    )
                     srt_paths[lang] = srt_path
-                    out_video = os.path.splitext(output_path_base)[0] + f"_{lang}{ext}"
-                    self.burner.burn(video_for_burn, srt_path, out_video, device=device,masked=masked)
-            # Burn original
-            out_video_orig = os.path.splitext(output_path_base)[0] + f"_orig{ext}"
-            self.burner.burn(video_for_burn, srt_paths["orig"], out_video_orig, device=device,masked=masked)
-            # Move SRTs to output location
+
+            # --- Hard-burn (still per-language and original) ---
+            if subtitle_burn_type in ("hard", "both"):
+                # Hard-burn original
+                out_video_orig = f"{base_out}_orig{ext}"
+                burn(video_for_burn, srt_orig, out_video_orig, device=device, masked=masked)
+                output_files["orig"] = os.path.basename(out_video_orig)
+                # Hard-burn translations
+                if output_languages:
+                    for lang in output_languages:
+                        srt_path = srt_paths[lang]
+                        out_video = f"{base_out}_{lang}{ext}"
+                        burn(video_for_burn, srt_path, out_video, device=device, masked=masked)
+                        output_files[lang] = os.path.basename(out_video)
+
+            # --- Soft-mux: make one MKV with ALL SRTs ---
+            if subtitle_burn_type in ("soft", "both"):
+                # Collect all SRTs and languages (original + translations)
+                multi_soft_mkv = f"{base_out}_multi_soft.mkv"
+                srt_list = [("und", srt_paths["orig"])]  # orig is typically "und" unless you have lang code
+                if output_languages:
+                    for lang in output_languages:
+                        srt_list.append((lang, srt_paths[lang]))
+                mux_multiple_srts_into_mkv(video_for_burn, srt_list, multi_soft_mkv)
+                output_files["multi_soft"] = os.path.basename(multi_soft_mkv)
+
+            # Move SRTs to output location and add to output_files
             for lang, path in srt_paths.items():
-                final_srt_path = os.path.splitext(output_path_base)[0] + f"_{lang}.srt"
+                final_srt_path = f"{base_out}_{lang}.srt"
                 shutil.move(path, final_srt_path)
-            return True
+                output_files[f"{lang}_srt"] = os.path.basename(final_srt_path)
+
+            # Also move and track the original SRT file
+            # final_srt_orig_path = f"{base_out}_orig.srt"
+            # shutil.move(srt_orig, final_srt_orig_path)
+            # output_files["orig_srt"] = os.path.basename(final_srt_orig_path)
+
+            return output_files
+
+

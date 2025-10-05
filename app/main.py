@@ -33,8 +33,8 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 TEMPLATES_DIR = os.path.join(BASE_DIR2, "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
-translator3 = LocalLLMTranslate(MODEL_DIR)
-translator2 = NLLBTranslate(MODEL_DIR)
+# translator3 = LocalLLMTranslate(MODEL_DIR)
+# translator2 = NLLBTranslate(MODEL_DIR)
 translator = M2M100Translate(MODEL_DIR)
 executor = ThreadPoolExecutor(max_workers=4)  # allow parallel jobs
 

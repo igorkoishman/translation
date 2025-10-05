@@ -1,21 +1,25 @@
-# Already present in your file:
+# API
 fastapi~=0.116.1
 uvicorn~=0.35.0
 aiofiles
 python-multipart
-whisperx @ git+https://github.com/m-bain/whisperx.git
-torch~=2.7.1
-srt~=3.5.3
 python-dotenv~=1.1.1
 requests
+srt~=3.5.3
 ffmpeg-python
-faster-whisper
 
-# Add these lines:
-opencv-python-headless   # for cv2 (NOT opencv-python)
-pytesseract~=0.3.13
-Pillow~=11.3.0
+# --- ASR stack (OpenAI Whisper + optional WhisperX alignment) ---
+openai-whisper
+# Torch CPU wheels (let pip pick a compatible version):
+torch --index-url https://download.pytorch.org/whl/cpu
+torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Alignment / extras (if you use your align step)
+whisperx==3.4.2
 transformers~=4.53.2
 huggingface-hub~=0.33.4
-whisperx~=3.4.2
-opencv-python~=4.12.0.88
+
+# OCR / CV (since your Dockerfile installs tesseract)
+pytesseract~=0.3.13
+Pillow~=11.3.0
+opencv-python-headless

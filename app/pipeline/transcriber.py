@@ -53,47 +53,93 @@ class FasterWhisperTranscriber(Transcriber):
         return transcribed,language
 
 
+# class OpenAIWhisperTranscriber(Transcriber):
+#     def __init__(self, models_root,backend_name,model_size,device):
+#         self.models_root = models_root
+#         self.device = device
+#         self.backend_name = backend_name
+#         self.model_size = model_size
+#
+#     def get_model_path(self):
+#         folder_name = f"{self.backend_name}-{self.model_size}"
+#         return os.path.join(self.models_root, folder_name)
+#
+#     def transcribe(self, audio_path, language=None,align_output=True):
+#         model_path = self.get_model_path()
+#         os.makedirs(model_path, exist_ok=True)
+#         spec = importlib.util.find_spec("whisper")
+#         if not spec:
+#             raise ImportError("OpenAI Whisper not found.")
+#         openai_whisper = importlib.util.module_from_spec(spec)
+#         spec.loader.exec_module(openai_whisper)
+#
+#         # Optionally download to model_dir; otherwise, uses default cache
+#         model_kwargs = {"device": self.device}
+#         if model_path is not None:
+#             model_kwargs["download_root"] = model_path
+#
+#         model = openai_whisper.load_model(self.model_size, **model_kwargs)
+#         transcribed = model.transcribe(audio_path, language=language)
+#         language = transcribed["language"]
+#         if align_output:
+#             print(f"Aliging Rows")
+#             try:
+#                 model_a, metadata = whisperx.load_align_model(
+#                     language_code=transcribed.get("language", language or "und"),
+#                     device=self.device
+#                 )
+#                 print("Starting alignment...")
+#                 transcribed = whisperx.align(transcribed["segments"], model_a, metadata, audio_path, self.device)
+#                 print("Alignment finished.")
+#             except Exception as e:
+#                 print(f"⚠️ Alignment failed: {e}")
+#         return  transcribed,language
+
+
 class OpenAIWhisperTranscriber(Transcriber):
-    def __init__(self, models_root,backend_name,model_size,device):
+    def __init__(self, models_root, backend_name, model_size, device="cpu"):
         self.models_root = models_root
-        self.device = device
         self.backend_name = backend_name
         self.model_size = model_size
+        # Resolve device safely
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        self.device = device
 
     def get_model_path(self):
-        folder_name = f"{self.backend_name}-{self.model_size}"
-        return os.path.join(self.models_root, folder_name)
+        return os.path.join(self.models_root, f"{self.backend_name}-{self.model_size}")
 
-    def transcribe(self, audio_path, language=None,align_output=True):
+    def transcribe(self, audio_path, language=None, align_output=True):
         model_path = self.get_model_path()
         os.makedirs(model_path, exist_ok=True)
+
+        # Require openai-whisper
         spec = importlib.util.find_spec("whisper")
         if not spec:
-            raise ImportError("OpenAI Whisper not found.")
-        openai_whisper = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(openai_whisper)
+            raise ImportError(
+                "OpenAI Whisper not found. Install with `pip install openai-whisper` "
+                "and ensure ffmpeg is installed in the container."
+            )
+        whisper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(whisper)
 
-        # Optionally download to model_dir; otherwise, uses default cache
-        model_kwargs = {"device": self.device}
-        if model_path is not None:
-            model_kwargs["download_root"] = model_path
+        # Whisper will cache to XDG_CACHE_HOME by default (we set /cache in Dockerfile)
+        model = whisper.load_model(self.model_size, device=self.device, download_root=model_path)
 
-        model = openai_whisper.load_model(self.model_size, **model_kwargs)
         transcribed = model.transcribe(audio_path, language=language)
-        language = transcribed["language"]
+        lang = transcribed.get("language", language)
+
         if align_output:
-            print(f"Aliging Rows")
             try:
-                model_a, metadata = whisperx.load_align_model(
-                    language_code=transcribed.get("language", language or "und"),
-                    device=self.device
-                )
-                print("Starting alignment...")
-                transcribed = whisperx.align(transcribed["segments"], model_a, metadata, audio_path, self.device)
+                print("Aligning rows…")
+                model_a, metadata = whisperx.load_align_model(language_code=lang or "und", device=self.device)
+                aligned = whisperx.align(transcribed["segments"], model_a, metadata, audio_path, self.device)
+                transcribed = aligned
                 print("Alignment finished.")
             except Exception as e:
                 print(f"⚠️ Alignment failed: {e}")
-        return  transcribed,language
+
+        return transcribed, lang
 
 
 

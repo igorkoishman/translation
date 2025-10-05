@@ -11,7 +11,9 @@ services:
       - .env.docker
     volumes:
       - data:/outputs
+      - whisper-cache:/cache    # <- matches XDG_CACHE_HOME
     restart: unless-stopped
 
 volumes:
   data:
+  whisper-cache:

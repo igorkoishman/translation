@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const audioTrackSelect = document.getElementById('audio-track');
   const subtitleTrackSelect = document.getElementById('subtitle-track');
   const useSubtitlesOnly = document.getElementById('use-subtitles-only');
+  const analyzeStatus = document.getElementById('analyze-status');
+  const analyzeProgress = document.getElementById('analyze-progress');
 
   const modelsByBackend = {
     'faster-whisper': ['tiny', 'base', 'small', 'medium', 'large-v1', 'large-v2', 'large-v3', 'large'],
@@ -47,15 +49,59 @@ document.addEventListener('DOMContentLoaded', () => {
     const formData = new FormData();
     formData.append('file', file);
 
-    // Reset dropdowns and hide selectors until analysis is complete
-    audioTrackSelect.innerHTML = '';
-    subtitleTrackSelect.innerHTML = '<option value="">None</option>';
+    // Reset dropdowns and show progress
+    const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+    audioTrackSelect.innerHTML = `<option>Preparing...</option>`;
+    subtitleTrackSelect.innerHTML = `<option value="">Please wait...</option>`;
     useSubtitlesOnly.checked = false;
-    trackSelectors.style.display = "none";
+    trackSelectors.style.display = "";
+    analyzeStatus.style.display = "";
+    analyzeProgress.textContent = `Uploading ${fileSizeMB}MB - 0%`;
+    console.log(`Starting file analysis for ${file.name} (${fileSizeMB}MB)...`);
 
     try {
-      let res = await fetch('/analyze', {method: 'POST', body: formData});
-      let data = await res.json();
+      // Use XMLHttpRequest for progress tracking
+      const data = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) {
+            const percentComplete = Math.round((e.loaded / e.total) * 100);
+            const loadedMB = (e.loaded / (1024 * 1024)).toFixed(1);
+            analyzeProgress.textContent = `Uploading: ${percentComplete}% (${loadedMB}MB / ${fileSizeMB}MB)`;
+            audioTrackSelect.innerHTML = `<option>Uploading: ${percentComplete}%</option>`;
+            console.log(`Upload progress: ${percentComplete}%`);
+          }
+        });
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status === 200) {
+            analyzeProgress.textContent = 'Processing file...';
+            audioTrackSelect.innerHTML = '<option>Processing file...</option>';
+            console.log('Upload complete, analyzing...');
+            try {
+              resolve(JSON.parse(xhr.responseText));
+            } catch (err) {
+              reject(new Error('Failed to parse response'));
+            }
+          } else {
+            reject(new Error(`Server error: ${xhr.status}`));
+          }
+        });
+
+        xhr.addEventListener('error', () => reject(new Error('Network error')));
+        xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+
+        xhr.open('POST', '/analyze');
+        xhr.send(formData);
+      });
+
+      console.log('Analysis complete:', data);
+      // Clear loading indicators
+      analyzeStatus.style.display = "none";
+      audioTrackSelect.innerHTML = '';
+      subtitleTrackSelect.innerHTML = '<option value="">None</option>';
+
       let audioCount = 0, subCount = 0;
       data.tracks.forEach(track => {
         if (track.type === 'audio') {
@@ -76,12 +122,18 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (audioCount + subCount > 0) {
         trackSelectors.style.display = "";
+        console.log(`Found ${audioCount} audio track(s) and ${subCount} subtitle track(s)`);
       } else {
         trackSelectors.style.display = "none";
+        console.log('No audio or subtitle tracks found');
       }
     } catch (err) {
       console.error("Track analysis failed:", err);
-      trackSelectors.style.display = "none";
+      analyzeProgress.textContent = 'Analysis failed: ' + err.message;
+      analyzeStatus.style.background = '#ffebee';
+      audioTrackSelect.innerHTML = '<option>Analysis failed</option>';
+      subtitleTrackSelect.innerHTML = '<option value="">Analysis failed</option>';
+      alert('Failed to analyze file: ' + err.message);
     }
   });
 

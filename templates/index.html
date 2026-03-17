@@ -15,6 +15,9 @@
 
   <!-- Row: Track selectors, spans both columns as a row -->
   <div id="track-selectors" style="display:none; grid-column: 1 / span 2;">
+    <div id="analyze-status" style="grid-column: 1 / span 2; padding: 10px; background: #e3f2fd; border-radius: 5px; margin-bottom: 10px; display:none;">
+      <strong>Analyzing file:</strong> <span id="analyze-progress">0%</span>
+    </div>
     <label for="audio-track">Audio Track for Transcription:</label>
     <select id="audio-track" name="audio_track"></select>
     <label for="subtitle-track">Subtitle Track (optional):</label>

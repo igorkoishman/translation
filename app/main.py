@@ -1,10 +1,13 @@
 import os
 import secrets
+import tempfile
 from datetime import datetime
 from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.responses import FileResponse, HTMLResponse
 import shutil
 from dotenv import load_dotenv
+import logging
+from logging.handlers import RotatingFileHandler
 
 from app.pipeline.FFmpegBurner import burn, mux_multiple_srts_into_mkv, analyze_media
 from app.pipeline.transcriber import FasterWhisperTranscriber, OpenAIWhisperTranscriber
@@ -17,9 +20,28 @@ from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
-app = FastAPI()
+# Configure logging
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler(
+            os.path.join(LOG_DIR, 'app.log'),
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5
+        ),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+app.state.upload_chunk_size = 1024 * 1024  # 1MB chunks
 def resolve_project_path(env_var_name: str, default_subdir: str):
     raw = os.getenv(env_var_name, default_subdir)
     rel_path = raw.lstrip(os.sep)
@@ -64,8 +86,28 @@ async def upload_video(
     job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
     input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
     align = align or None
-    with open(input_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+
+    logger.info(f"[{job_id}] Starting upload for file: {file.filename}")
+    logger.info(f"[{job_id}] Parameters - langs: {langs}, model: {model}, model_type: {model_type}, burn_type: {subtitle_burn_type}")
+
+    # Stream file in chunks to avoid memory issues with large files
+    try:
+        bytes_written = 0
+        with open(input_path, "wb") as f:
+            while True:
+                chunk = await file.read(app.state.upload_chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                bytes_written += len(chunk)
+                if bytes_written % (10 * 1024 * 1024) == 0:  # Log every 10MB
+                    logger.info(f"[{job_id}] Written {bytes_written / (1024*1024):.1f}MB")
+
+        file_size_mb = bytes_written / (1024 * 1024)
+        logger.info(f"[{job_id}] Upload complete - Total size: {file_size_mb:.2f}MB, saved to: {input_path}")
+    except Exception as e:
+        logger.error(f"[{job_id}] Upload failed: {str(e)}", exc_info=True)
+        raise
 
     langs_list = langs.strip().split()
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.{ext}")
@@ -73,6 +115,7 @@ async def upload_video(
     # translator = LocalLLMTranslate(MODEL_DIR) if langs_list else None
     # --- MAIN SUBTITLE-ONLY PIPELINE ---
     if use_subtitles_only and subtitle_track is not None:
+        logger.info(f"[{job_id}] Starting subtitle-only pipeline with subtitle track: {subtitle_track}")
         analysis = analyze_media(input_path)
         sub_stream_index = None
         orig_lang_from_track = None
@@ -82,7 +125,10 @@ async def upload_video(
                 orig_lang_from_track = stream.get('tags', {}).get('language', None)
                 break
         if sub_stream_index is None:
+            logger.error(f"[{job_id}] Subtitle track {subtitle_track} not found")
             return {"error": "Subtitle track not found"}
+
+        logger.info(f"[{job_id}] Found subtitle stream index: {sub_stream_index}, language: {orig_lang_from_track}")
 
         subtitle_lang = original_lang or orig_lang_from_track or "und"
         srt_path = os.path.splitext(output_path)[0] + "_orig.srt"
@@ -133,10 +179,12 @@ async def upload_video(
             outputs["multi_soft"] = os.path.basename(multi_soft_mkv)
         with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
             json.dump(outputs, f)
+        logger.info(f"[{job_id}] Subtitle-only pipeline complete. Outputs: {list(outputs.keys())}")
         return {"job_id": job_id}
 
     # --- AUDIO-TRACK OR FULL PIPELINE ---
     # Find actual ffmpeg stream index for audio
+    logger.info(f"[{job_id}] Starting audio/full pipeline")
     analysis = analyze_media(input_path)
     audio_stream_index = None
     def extract_audio(infile, outfile, ffmpeg_index):
@@ -154,10 +202,13 @@ async def upload_video(
     transcription_audio_path = None
     if audio_stream_index is not None:
         transcription_audio_path = os.path.splitext(output_path)[0] + "_track.wav"
+        logger.info(f"[{job_id}] Extracting audio track {audio_stream_index} to {transcription_audio_path}")
         extract_audio(input_path, transcription_audio_path, audio_stream_index)
     else:
         transcription_audio_path = input_path  # fallback, will be video file
+        logger.info(f"[{job_id}] No specific audio track selected, using video file directly")
 
+    logger.info(f"[{job_id}] Initializing transcriber: {model_type} with model: {model}, device: {ml_device}")
     if model_type == "faster-whisper":
         transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
     else:
@@ -168,25 +219,42 @@ async def upload_video(
     pipeline = AutoSubtitlePipeline(transcriber, translator)
 
     def run_pipeline():
-        start_time = datetime.now()
-        result_files = pipeline.process(
-            video_path=input_path,
-            audio_path=transcription_audio_path,
-            output_path_base=output_path,
-            output_languages=langs_list,
-            language=original_lang,
-            device=video_device,
-            align_output=align,
-            subtitle_burn_type=subtitle_burn_type,translation_model_path=MODEL_DIR
-        )
-        duration = round((datetime.now() - start_time).total_seconds(), 2)
-        result_files["duration_seconds"] = str(duration)
-        with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
-            json.dump(result_files, f)
-        if transcription_audio_path and os.path.exists(transcription_audio_path) and transcription_audio_path != input_path:
-            os.remove(transcription_audio_path)
+        try:
+            start_time = datetime.now()
+            logger.info(f"[{job_id}] Starting pipeline processing at {start_time}")
+
+            result_files = pipeline.process(
+                video_path=input_path,
+                audio_path=transcription_audio_path,
+                output_path_base=output_path,
+                output_languages=langs_list,
+                language=original_lang,
+                device=video_device,
+                align_output=align,
+                subtitle_burn_type=subtitle_burn_type,translation_model_path=MODEL_DIR
+            )
+
+            duration = round((datetime.now() - start_time).total_seconds(), 2)
+            result_files["duration_seconds"] = str(duration)
+
+            with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+                json.dump(result_files, f)
+
+            logger.info(f"[{job_id}] Pipeline complete in {duration}s. Outputs: {list(result_files.keys())}")
+
+            # Cleanup temporary files
+            if transcription_audio_path and os.path.exists(transcription_audio_path) and transcription_audio_path != input_path:
+                os.remove(transcription_audio_path)
+                logger.info(f"[{job_id}] Cleaned up temporary audio file: {transcription_audio_path}")
+        except Exception as e:
+            logger.error(f"[{job_id}] Pipeline failed: {str(e)}", exc_info=True)
+            error_status = {"error": str(e), "status": "failed"}
+            with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+                json.dump(error_status, f)
+            raise
 
     asyncio.get_event_loop().run_in_executor(executor, run_pipeline)
+    logger.info(f"[{job_id}] Job submitted to executor")
     return {"job_id": job_id}
 
 
@@ -219,12 +287,29 @@ def download_file(output_file: str):
 
 @app.post("/analyze")
 async def analyze_file(file: UploadFile = File(...)):
-    # Save temp
+    # Use /tmp for analyze to avoid filling up project disk
     ext = file.filename.split('.')[-1]
-    tmp_path = f"/tmp/{secrets.token_hex(6)}.{ext}"
-    with open(tmp_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    analyze_id = secrets.token_hex(6)
+    tmp_path = os.path.join(tempfile.gettempdir(), f"analyze_{analyze_id}.{ext}")
+
+    logger.info(f"[analyze-{analyze_id}] Starting analysis for: {file.filename}")
+
     try:
+        # Stream file in chunks
+        bytes_written = 0
+        with open(tmp_path, "wb") as f:
+            while True:
+                chunk = await file.read(app.state.upload_chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                bytes_written += len(chunk)
+                if bytes_written % (100 * 1024 * 1024) == 0:  # Log every 100MB
+                    logger.info(f"[analyze-{analyze_id}] Written {bytes_written / (1024*1024):.1f}MB")
+
+        file_size_mb = bytes_written / (1024 * 1024)
+        logger.info(f"[analyze-{analyze_id}] File saved to /tmp ({file_size_mb:.2f}MB), analyzing media streams...")
+
         analysis = analyze_media(tmp_path)
         tracks = []
         for stream in analysis.get('streams', []):
@@ -239,9 +324,16 @@ async def analyze_file(file: UploadFile = File(...)):
                 'id': stream.get('id', None)
             }
             tracks.append(track_info)
+
+        logger.info(f"[analyze-{analyze_id}] Analysis complete. Found {len(tracks)} tracks")
         return {'tracks': tracks}
+    except Exception as e:
+        logger.error(f"[analyze-{analyze_id}] Analysis failed: {str(e)}", exc_info=True)
+        raise
     finally:
-        os.remove(tmp_path)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+            logger.info(f"[analyze-{analyze_id}] Cleaned up temporary file: {tmp_path}")
 
 def resolve_device(user_device: str = None):
     import platform
@@ -317,4 +409,4 @@ def resolve_device(user_device: str = None):
 if __name__ == "__main__":
     import uvicorn
     preload_models(MODEL_DIR)
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=9090, reload=True)

@@ -5,3 +5,15 @@ outputs/
 __pycache__/
 *.pyc
 model
+
+# Logs
+logs/
+*.log
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Runtime
+.locks/

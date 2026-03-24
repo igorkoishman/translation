@@ -15,6 +15,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const analyzeStatus = document.getElementById('analyze-status');
   const analyzeProgress = document.getElementById('analyze-progress');
 
+  let currentFileId = null;
+
   const modelsByBackend = {
     'faster-whisper': ['tiny', 'base', 'small', 'medium', 'large-v1', 'large-v2', 'large-v3', 'large'],
     'openai-whisper': [
@@ -42,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const fileInput = document.getElementById('file-input');
   fileInput.addEventListener('change', async (e) => {
     const file = fileInput.files[0];
+    currentFileId = null;
     if (!file) {
       trackSelectors.style.display = "none";
       return;
@@ -97,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       console.log('Analysis complete:', data);
+      currentFileId = data.file_id;
       // Clear loading indicators
       analyzeStatus.style.display = "none";
       audioTrackSelect.innerHTML = '';
@@ -176,10 +180,14 @@ document.addEventListener('DOMContentLoaded', () => {
       thisProgress.style.marginBottom = "8px";
       progressList.appendChild(thisProgress);
     }
-    thisProgress.innerText = `Uploading ${file.name}...`;
+    thisProgress.innerText = currentFileId ? `Staging ${file.name}...` : `Uploading ${file.name}...`;
 
     const formData = new FormData();
-    formData.append('file', file);
+    if (currentFileId) {
+      formData.append('file_id', currentFileId);
+    } else {
+      formData.append('file', file);
+    }
     formData.append('langs', langs);
     formData.append('original_lang', original_lang);
     formData.append('model', model);
@@ -195,6 +203,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch('/upload', { method: 'POST', body: formData });
       const data = await res.json();
+
+      if (data.error) {
+        thisProgress.innerText = 'Error: ' + data.error;
+        thisProgress.style.color = "red";
+        return;
+      }
 
       if (!data.job_id) {
         thisProgress.innerText = 'Error: No job_id received';

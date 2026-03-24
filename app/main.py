@@ -26,18 +26,26 @@ PROJECT_ROOT = os.path.dirname(BASE_DIR)
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        RotatingFileHandler(
-            os.path.join(LOG_DIR, 'app.log'),
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5
-        ),
-        logging.StreamHandler()
-    ]
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Clear existing handlers if any
+while root_logger.handlers:
+    root_logger.removeHandler(root_logger.handlers[0])
+
+file_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, 'app.log'),
+    maxBytes=10*1024*1024,
+    backupCount=5
 )
+file_handler.setFormatter(log_formatter)
+root_logger.addHandler(file_handler)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(log_formatter)
+root_logger.addHandler(stream_handler)
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -67,7 +75,8 @@ async def home(request: Request):
 
 @app.post("/upload")
 async def upload_video(
-        file: UploadFile = File(...),
+        file: UploadFile = File(None),
+        file_id: str = Form(None),
         langs: str = Form(""),
         model: str = Form("large"),
         model_type: str = Form("faster-whisper"),
@@ -81,33 +90,46 @@ async def upload_video(
 ):
     import subprocess
 
-    splitterd = file.filename.split('.')
-    ext = splitterd[-1]
-    job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
-    input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
+    if file:
+        filename = file.filename
+        splitterd = filename.split('.')
+        ext = splitterd[-1]
+        job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
+        input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
+        
+        logger.info(f"[{job_id}] Starting upload for file: {filename}")
+        try:
+            bytes_written = 0
+            with open(input_path, "wb") as f:
+                while True:
+                    chunk = await file.read(app.state.upload_chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    bytes_written += len(chunk)
+            logger.info(f"[{job_id}] Upload complete - size: {bytes_written / (1024*1024):.2f}MB")
+        except Exception as e:
+            logger.error(f"[{job_id}] Upload failed: {str(e)}", exc_info=True)
+            raise
+    elif file_id:
+        temp_dir = tempfile.gettempdir()
+        matches = [f for f in os.listdir(temp_dir) if f.startswith(f"analyze_{file_id}")]
+        if not matches:
+            return {"error": "Staged file not found. Please re-analyze or upload manually."}
+        
+        staged_filename = matches[0]
+        staged_path = os.path.join(temp_dir, staged_filename)
+        ext = staged_filename.split('.')[-1]
+        
+        job_id = f"staged_{file_id}"
+        input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
+        shutil.move(staged_path, input_path)
+        logger.info(f"[{job_id}] Using staged file: {staged_filename}")
+    else:
+        return {"error": "No file or file_id provided"}
+
     align = align or None
-
-    logger.info(f"[{job_id}] Starting upload for file: {file.filename}")
-    logger.info(f"[{job_id}] Parameters - langs: {langs}, model: {model}, model_type: {model_type}, burn_type: {subtitle_burn_type}")
-
-    # Stream file in chunks to avoid memory issues with large files
-    try:
-        bytes_written = 0
-        with open(input_path, "wb") as f:
-            while True:
-                chunk = await file.read(app.state.upload_chunk_size)
-                if not chunk:
-                    break
-                f.write(chunk)
-                bytes_written += len(chunk)
-                if bytes_written % (10 * 1024 * 1024) == 0:  # Log every 10MB
-                    logger.info(f"[{job_id}] Written {bytes_written / (1024*1024):.1f}MB")
-
-        file_size_mb = bytes_written / (1024 * 1024)
-        logger.info(f"[{job_id}] Upload complete - Total size: {file_size_mb:.2f}MB, saved to: {input_path}")
-    except Exception as e:
-        logger.error(f"[{job_id}] Upload failed: {str(e)}", exc_info=True)
-        raise
+    logger.info(f"[{job_id}] Parameters - langs: {langs}, model: {model}, model_type: {model_type}")
 
     langs_list = langs.strip().split()
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.{ext}")
@@ -130,7 +152,7 @@ async def upload_video(
 
         logger.info(f"[{job_id}] Found subtitle stream index: {sub_stream_index}, language: {orig_lang_from_track}")
 
-        subtitle_lang = original_lang or orig_lang_from_track or "und"
+        subtitle_lang = original_lang.strip() if original_lang and original_lang.strip() else (orig_lang_from_track or "und")
         srt_path = os.path.splitext(output_path)[0] + "_orig.srt"
 
         # Extract original subtitle track to SRT
@@ -228,7 +250,7 @@ async def upload_video(
                 audio_path=transcription_audio_path,
                 output_path_base=output_path,
                 output_languages=langs_list,
-                language=original_lang,
+                language=original_lang.strip() if original_lang and original_lang.strip() else None,
                 device=video_device,
                 align_output=align,
                 subtitle_burn_type=subtitle_burn_type,translation_model_path=MODEL_DIR
@@ -304,11 +326,8 @@ async def analyze_file(file: UploadFile = File(...)):
                     break
                 f.write(chunk)
                 bytes_written += len(chunk)
-                if bytes_written % (100 * 1024 * 1024) == 0:  # Log every 100MB
-                    logger.info(f"[analyze-{analyze_id}] Written {bytes_written / (1024*1024):.1f}MB")
 
-        file_size_mb = bytes_written / (1024 * 1024)
-        logger.info(f"[analyze-{analyze_id}] File saved to /tmp ({file_size_mb:.2f}MB), analyzing media streams...")
+        logger.info(f"[analyze-{analyze_id}] File saved to /tmp ({bytes_written / (1024*1024):.2f}MB), analyzing media streams...")
 
         analysis = analyze_media(tmp_path)
         tracks = []
@@ -326,14 +345,25 @@ async def analyze_file(file: UploadFile = File(...)):
             tracks.append(track_info)
 
         logger.info(f"[analyze-{analyze_id}] Analysis complete. Found {len(tracks)} tracks")
-        return {'tracks': tracks}
+        return {'tracks': tracks, 'file_id': analyze_id}
     except Exception as e:
         logger.error(f"[analyze-{analyze_id}] Analysis failed: {str(e)}", exc_info=True)
-        raise
-    finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
-            logger.info(f"[analyze-{analyze_id}] Cleaned up temporary file: {tmp_path}")
+        raise
+
+@app.on_event("startup")
+async def startup_event():
+    # Optional: cleanup old staged files on startup
+    import time
+    temp_dir = tempfile.gettempdir()
+    now = time.time()
+    for f in os.listdir(temp_dir):
+        if f.startswith("analyze_"):
+            path = os.path.join(temp_dir, f)
+            if os.stat(path).st_mtime < now - 24 * 3600:
+                os.remove(path)
+                logger.info(f"Cleaned up old staged file: {f}")
 
 def resolve_device(user_device: str = None):
     import platform
@@ -408,5 +438,5 @@ def resolve_device(user_device: str = None):
 
 if __name__ == "__main__":
     import uvicorn
-    preload_models(MODEL_DIR)
+    # Start server first so logs are active
     uvicorn.run("app.main:app", host="0.0.0.0", port=9090, reload=True)

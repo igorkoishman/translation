@@ -1,19 +1,8 @@
-models/
+output/
+venv/
+model/
 outputs/
-.env
-.env.docker
-__pycache__/
-*.pyc
-model
-
-# Logs
-logs/
-*.log
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# Runtime
-.locks/
+*.mkv
+*.mp4
+*.wav
+*.srt

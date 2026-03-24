@@ -27,11 +27,11 @@ def ensure_model_downloaded(model_id, cache_dir=None):
         else:
             AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
         try:
-            AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir)
+            AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir, use_safetensors=True)
         except OSError as e:
             if "pytorch_model.bin" in str(e) and "TensorFlow weights" in str(e):
                 print(f"Retrying {model_id} with from_tf=True ...", flush=True)
-                AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir, from_tf=True)
+                AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir, from_tf=True, use_safetensors=True)
             else:
                 raise
         print(f"Model {model_id} is ready.", flush=True)
@@ -54,14 +54,14 @@ def get_pipeline_with_tf_fallback(*args, **kwargs):
         tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir, use_fast=False)
         kwargs["tokenizer"] = tokenizer
     try:
-        return hf_pipeline(*args, **kwargs)
+        return hf_pipeline(*args, use_safetensors=True, **kwargs)
     except OSError as e:
         if "pytorch_model.bin" in str(e) and "TensorFlow weights" in str(e):
             print(f"Retrying pipeline with from_tf=True ...", flush=True)
             if model_id and "nllb" in model_id:
                 tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir, use_fast=False)
                 kwargs["tokenizer"] = tokenizer
-            return hf_pipeline(*args, from_tf=True, **kwargs)
+            return hf_pipeline(*args, from_tf=True, use_safetensors=True, **kwargs)
         else:
             raise
 
@@ -181,7 +181,7 @@ class LocalLLMTranslate(Translator):
                     pipeline_task = f"translation_{src_code}_to_{tgt_code}"
                     if key not in self._pipeline_cache:
                         try:
-                            self._pipeline_cache[key] = hf_pipeline(pipeline_task, model=model_name)
+                            self._pipeline_cache[key] = hf_pipeline(pipeline_task, model=model_name, use_safetensors=True)
                         except Exception as e:
                             attempts.append((pipeline_task, model_name, str(e)))
                             continue

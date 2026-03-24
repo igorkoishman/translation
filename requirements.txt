@@ -11,8 +11,8 @@ ffmpeg-python
 # --- ASR stack (OpenAI Whisper + optional WhisperX alignment) ---
 openai-whisper
 # Torch CPU wheels (let pip pick a compatible version):
-torch --index-url https://download.pytorch.org/whl/cpu
-torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch >= 2.6.0 --index-url https://download.pytorch.org/whl/cpu
+torchaudio >= 2.6.0 --index-url https://download.pytorch.org/whl/cpu
 
 # Alignment / extras (if you use your align step)
 whisperx==3.4.2

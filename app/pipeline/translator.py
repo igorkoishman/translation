@@ -54,14 +54,14 @@ def get_pipeline_with_tf_fallback(*args, **kwargs):
         tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir, use_fast=False)
         kwargs["tokenizer"] = tokenizer
     try:
-        return hf_pipeline(*args, use_safetensors=True, **kwargs)
+        return hf_pipeline(*args, **kwargs)
     except OSError as e:
         if "pytorch_model.bin" in str(e) and "TensorFlow weights" in str(e):
             print(f"Retrying pipeline with from_tf=True ...", flush=True)
             if model_id and "nllb" in model_id:
                 tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir, use_fast=False)
                 kwargs["tokenizer"] = tokenizer
-            return hf_pipeline(*args, from_tf=True, use_safetensors=True, **kwargs)
+            return hf_pipeline(*args, from_tf=True, **kwargs)
         else:
             raise
 
@@ -181,7 +181,7 @@ class LocalLLMTranslate(Translator):
                     pipeline_task = f"translation_{src_code}_to_{tgt_code}"
                     if key not in self._pipeline_cache:
                         try:
-                            self._pipeline_cache[key] = hf_pipeline(pipeline_task, model=model_name, use_safetensors=True)
+                            self._pipeline_cache[key] = hf_pipeline(pipeline_task, model=model_name)
                         except Exception as e:
                             attempts.append((pipeline_task, model_name, str(e)))
                             continue

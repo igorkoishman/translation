@@ -1,3 +1,17 @@
+import torch
+import typing
+# Patch torch.load to handle PyTorch 2.6 weights_only default change
+original_load = torch.load
+def patched_load(*args, **kwargs):
+    # Force weights_only=False for all loads in this process
+    kwargs['weights_only'] = False
+    return original_load(*args, **kwargs)
+torch.load = patched_load
+
+from omegaconf.listconfig import ListConfig
+from omegaconf.dictconfig import DictConfig
+from omegaconf.base import ContainerMetadata, Node
+torch.serialization.add_safe_globals([ListConfig, DictConfig, ContainerMetadata, Node, typing.Any])
 import os
 import secrets
 import tempfile
@@ -65,7 +79,7 @@ TEMPLATES_DIR = os.path.join(BASE_DIR2, "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 # translator3 = LocalLLMTranslate(MODEL_DIR)
 # translator2 = NLLBTranslate(MODEL_DIR)
-translator = M2M100Translate(MODEL_DIR)
+# translator = M2M100Translate(MODEL_DIR)
 executor = ThreadPoolExecutor(max_workers=4)  # allow parallel jobs
 
 
@@ -86,9 +100,19 @@ async def upload_video(
         original_lang: str = Form(""),
         audio_track: int = Form(None),
         subtitle_track: int = Form(None),
-        use_subtitles_only: bool = Form(False)
+        use_subtitles_only: bool = Form(False),
+        translator_type: str = Form("m2m100")
 ):
     import subprocess
+    loop = asyncio.get_running_loop()
+
+    # --- RESOLVE TRANSLATOR ---
+    if translator_type == "nllb":
+        current_translator = NLLBTranslate(MODEL_DIR)
+    elif translator_type == "localllm":
+        current_translator = LocalLLMTranslate(MODEL_DIR)
+    else:
+        current_translator = M2M100Translate(MODEL_DIR)
 
     if file:
         filename = file.filename
@@ -96,16 +120,18 @@ async def upload_video(
         ext = splitterd[-1]
         job_id = f"{splitterd[0]}_{secrets.token_hex(4)}"
         input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
-        
+
         logger.info(f"[{job_id}] Starting upload for file: {filename}")
         try:
             bytes_written = 0
+            # Open file once and write chunks in a thread-safe way
             with open(input_path, "wb") as f:
                 while True:
                     chunk = await file.read(app.state.upload_chunk_size)
                     if not chunk:
                         break
-                    f.write(chunk)
+                    # Use run_in_executor for blocking file write
+                    await loop.run_in_executor(None, f.write, chunk)
                     bytes_written += len(chunk)
             logger.info(f"[{job_id}] Upload complete - size: {bytes_written / (1024*1024):.2f}MB")
         except Exception as e:
@@ -116,14 +142,15 @@ async def upload_video(
         matches = [f for f in os.listdir(temp_dir) if f.startswith(f"analyze_{file_id}")]
         if not matches:
             return {"error": "Staged file not found. Please re-analyze or upload manually."}
-        
+
         staged_filename = matches[0]
         staged_path = os.path.join(temp_dir, staged_filename)
         ext = staged_filename.split('.')[-1]
-        
+
         job_id = f"staged_{file_id}"
         input_path = os.path.join(OUTPUT_DIR, f"{job_id}_input.{ext}")
-        shutil.move(staged_path, input_path)
+        # Use run_in_executor for blocking shutil.move
+        await loop.run_in_executor(None, shutil.move, staged_path, input_path)
         logger.info(f"[{job_id}] Using staged file: {staged_filename}")
     else:
         return {"error": "No file or file_id provided"}
@@ -134,205 +161,139 @@ async def upload_video(
     langs_list = langs.strip().split()
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.{ext}")
     ml_device, video_device = resolve_device(user_device=processor)
-    # translator = LocalLLMTranslate(MODEL_DIR) if langs_list else None
-    # --- MAIN SUBTITLE-ONLY PIPELINE ---
-    if use_subtitles_only and subtitle_track is not None:
-        logger.info(f"[{job_id}] Starting subtitle-only pipeline with subtitle track: {subtitle_track}")
-        analysis = analyze_media(input_path)
-        sub_stream_index = None
-        orig_lang_from_track = None
-        for stream in analysis.get('streams', []):
-            if stream['codec_type'] == 'subtitle' and (str(stream['index']) == str(subtitle_track)):
-                sub_stream_index = stream['index']
-                orig_lang_from_track = stream.get('tags', {}).get('language', None)
-                break
-        if sub_stream_index is None:
-            logger.error(f"[{job_id}] Subtitle track {subtitle_track} not found")
-            return {"error": "Subtitle track not found"}
 
-        logger.info(f"[{job_id}] Found subtitle stream index: {sub_stream_index}, language: {orig_lang_from_track}")
+    # --- MAIN PIPELINE SUBMIT ---
+    # Create initial status file
+    initial_status = {"status": "processing", "start_time": datetime.now().isoformat()}
+    with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+        json.dump(initial_status, f)
 
-        subtitle_lang = original_lang.strip() if original_lang and original_lang.strip() else (orig_lang_from_track or "und")
-        srt_path = os.path.splitext(output_path)[0] + "_orig.srt"
+    async def run_pipeline_task():
+        if use_subtitles_only and subtitle_track is not None:
+            logger.info(f"[{job_id}] Starting subtitle-only pipeline in executor")
+            # We wrap the whole subtitle-only logic in executor if it's blocking
+            def process_subs_only():
+                analysis = analyze_media(input_path)
+                sub_stream_index = None
+                orig_lang_from_track = None
+                for stream in analysis.get('streams', []):
+                    if stream['codec_type'] == 'subtitle' and (str(stream['index']) == str(subtitle_track)):
+                        sub_stream_index = stream['index']
+                        orig_lang_from_track = stream.get('tags', {}).get('language', None)
+                        break
+                if sub_stream_index is None:
+                    return {"error": "Subtitle track not found"}
 
-        # Extract original subtitle track to SRT
-        def extract_subs(infile, outfile, ffmpeg_index):
-            cmd = [
-                "ffmpeg", "-y", "-i", infile, "-map", f"0:{ffmpeg_index}", outfile
-            ]
-            subprocess.run(cmd, check=True)
-        extract_subs(input_path, srt_path, sub_stream_index)
+                subtitle_lang = original_lang.strip() if original_lang and original_lang.strip() else (orig_lang_from_track or "und")
+                srt_path = os.path.splitext(output_path)[0] + "_orig.srt"
 
-        outputs = {
-            "orig_srt": os.path.basename(srt_path)
-        }
+                def extract_subs(infile, outfile, ffmpeg_index):
+                    cmd = ["ffmpeg", "-y", "-i", infile, "-map", f"0:{ffmpeg_index}", outfile]
+                    subprocess.run(cmd, check=True)
+                extract_subs(input_path, srt_path, sub_stream_index)
 
-
-        # Hard-burn original
-        if subtitle_burn_type in ("hard", "both"):
-            out_video_orig = os.path.splitext(output_path)[0] + f"_orig.{ext}"
-            burn(input_path, srt_path, out_video_orig)
-            outputs["orig"] = os.path.basename(out_video_orig)
-
-        # Prepare for multi-soft
-        srt_list = [("und", srt_path)]
-        if langs_list:
-            for lang in langs_list:
-                translated_srt_path = os.path.splitext(output_path)[0] + f"_{lang}.srt"
-                translator.translate_srt(
-                    output_srt=translated_srt_path,
-                    input_srt=srt_path,
-                    src_lang=subtitle_lang,
-                    tgt_lang=lang
-                )
-                outputs[f"{lang}_srt"] = os.path.basename(translated_srt_path)
-                srt_list.append((lang, translated_srt_path))
-                # Hard-burn
+                outputs = {"orig_srt": os.path.basename(srt_path)}
                 if subtitle_burn_type in ("hard", "both"):
-                    out_video = os.path.splitext(output_path)[0] + f"_{lang}.{ext}"
-                    burn(input_path, translated_srt_path, out_video)
-                    outputs[lang] = os.path.basename(out_video)
+                    out_video_orig = os.path.splitext(output_path)[0] + f"_orig.{ext}"
+                    burn(input_path, srt_path, out_video_orig)
+                    outputs["orig"] = os.path.basename(out_video_orig)
 
-        # Soft-mux *all* SRTs into one MKV
-        if subtitle_burn_type in ("soft", "both"):
-            multi_soft_mkv = os.path.splitext(output_path)[0] + "_multi_soft.mkv"
-            filtered_srt_list = [item for item in srt_list if '_orig' not in item[1]]
-            mux_multiple_srts_into_mkv(input_path, filtered_srt_list, multi_soft_mkv)
-            outputs["multi_soft"] = os.path.basename(multi_soft_mkv)
-        with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
-            json.dump(outputs, f)
-        logger.info(f"[{job_id}] Subtitle-only pipeline complete. Outputs: {list(outputs.keys())}")
-        return {"job_id": job_id}
+                srt_list = [("und", srt_path)]
+                if langs_list:
+                    for lang in langs_list:
+                        translated_srt_path = os.path.splitext(output_path)[0] + f"_{lang}.srt"
+                        current_translator.translate_srt(translated_srt_path, srt_path, subtitle_lang, lang)
+                        outputs[f"{lang}_srt"] = os.path.basename(translated_srt_path)
+                        srt_list.append((lang, translated_srt_path))
+                        if subtitle_burn_type in ("hard", "both"):
+                            out_video = os.path.splitext(output_path)[0] + f"_{lang}.{ext}"
+                            burn(input_path, translated_srt_path, out_video)
+                            outputs[lang] = os.path.basename(out_video)
 
-    # --- AUDIO-TRACK OR FULL PIPELINE ---
-    # Find actual ffmpeg stream index for audio
-    logger.info(f"[{job_id}] Starting audio/full pipeline")
-    analysis = analyze_media(input_path)
-    audio_stream_index = None
-    def extract_audio(infile, outfile, ffmpeg_index):
-        cmd = [
-            "ffmpeg", "-y", "-i", infile, "-map", f"0:{ffmpeg_index}", "-vn", "-acodec", "pcm_s16le", outfile
-        ]
-        subprocess.run(cmd, check=True)
-    if audio_track is not None:
-        for stream in analysis.get('streams', []):
-            if stream['codec_type'] == 'audio' and (str(stream['index']) == str(audio_track)):
-                audio_stream_index = stream['index']
-                break
+                if subtitle_burn_type in ("soft", "both"):
+                    multi_soft_mkv = os.path.splitext(output_path)[0] + "_multi_soft.mkv"
+                    filtered_srt_list = [item for item in srt_list if '_orig' not in item[1]]
+                    mux_multiple_srts_into_mkv(input_path, filtered_srt_list, multi_soft_mkv)
+                    outputs["multi_soft"] = os.path.basename(multi_soft_mkv)
 
-    # Only use WAV for transcription; never for burning/muxing!
-    transcription_audio_path = None
-    if audio_stream_index is not None:
-        transcription_audio_path = os.path.splitext(output_path)[0] + "_track.wav"
-        logger.info(f"[{job_id}] Extracting audio track {audio_stream_index} to {transcription_audio_path}")
-        extract_audio(input_path, transcription_audio_path, audio_stream_index)
-    else:
-        transcription_audio_path = input_path  # fallback, will be video file
-        logger.info(f"[{job_id}] No specific audio track selected, using video file directly")
+                with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+                    json.dump(outputs, f)
+                return outputs
 
-    logger.info(f"[{job_id}] Initializing transcriber: {model_type} with model: {model}, device: {ml_device}")
-    if model_type == "faster-whisper":
-        transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
-    else:
-        transcriber = OpenAIWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
+            await loop.run_in_executor(executor, process_subs_only)
+        else:
+            # AUDIO-TRACK OR FULL PIPELINE
+            def run_full_pipeline():
+                try:
+                    analysis = analyze_media(input_path)
+                    audio_stream_index = None
+                    if audio_track is not None:
+                        for stream in analysis.get('streams', []):
+                            if stream['codec_type'] == 'audio' and (str(stream['index']) == str(audio_track)):
+                                audio_stream_index = stream['index']
+                                break
 
+                    transcription_audio_path = None
+                    if audio_stream_index is not None:
+                        transcription_audio_path = os.path.splitext(output_path)[0] + "_track.wav"
+                        cmd = ["ffmpeg", "-y", "-i", input_path, "-map", f"0:{audio_stream_index}", "-vn", "-acodec", "pcm_s16le", transcription_audio_path]
+                        subprocess.run(cmd, check=True)
+                    else:
+                        transcription_audio_path = input_path
 
-    from app.auto_subtitles import AutoSubtitlePipeline
-    pipeline = AutoSubtitlePipeline(transcriber, translator)
+                    if model_type == "faster-whisper":
+                        transcriber = FasterWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
+                    else:
+                        transcriber = OpenAIWhisperTranscriber(MODEL_DIR, model_type, model, ml_device)
 
-    def run_pipeline():
-        try:
-            start_time = datetime.now()
-            logger.info(f"[{job_id}] Starting pipeline processing at {start_time}")
+                    from app.auto_subtitles import AutoSubtitlePipeline
+                    pipeline = AutoSubtitlePipeline(transcriber, current_translator)
 
-            result_files = pipeline.process(
-                video_path=input_path,
-                audio_path=transcription_audio_path,
-                output_path_base=output_path,
-                output_languages=langs_list,
-                language=original_lang.strip() if original_lang and original_lang.strip() else None,
-                device=video_device,
-                align_output=align,
-                subtitle_burn_type=subtitle_burn_type,translation_model_path=MODEL_DIR
-            )
+                    start_time = datetime.now()
+                    result_files = pipeline.process(
+                        video_path=input_path, audio_path=transcription_audio_path,
+                        output_path_base=output_path, output_languages=langs_list,
+                        language=original_lang.strip() if original_lang and original_lang.strip() else None,
+                        device=video_device, align_output=align,
+                        subtitle_burn_type=subtitle_burn_type, translation_model_path=MODEL_DIR
+                    )
+                    duration = round((datetime.now() - start_time).total_seconds(), 2)
+                    result_files["duration_seconds"] = str(duration)
+                    with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+                        json.dump(result_files, f)
 
-            duration = round((datetime.now() - start_time).total_seconds(), 2)
-            result_files["duration_seconds"] = str(duration)
+                    if transcription_audio_path and os.path.exists(transcription_audio_path) and transcription_audio_path != input_path:
+                        os.remove(transcription_audio_path)
+                except Exception as e:
+                    logger.error(f"[{job_id}] Pipeline failed: {str(e)}", exc_info=True)
+                    with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
+                        json.dump({"error": str(e), "status": "failed"}, f)
 
-            with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
-                json.dump(result_files, f)
+            await loop.run_in_executor(executor, run_full_pipeline)
 
-            logger.info(f"[{job_id}] Pipeline complete in {duration}s. Outputs: {list(result_files.keys())}")
-
-            # Cleanup temporary files
-            if transcription_audio_path and os.path.exists(transcription_audio_path) and transcription_audio_path != input_path:
-                os.remove(transcription_audio_path)
-                logger.info(f"[{job_id}] Cleaned up temporary audio file: {transcription_audio_path}")
-        except Exception as e:
-            logger.error(f"[{job_id}] Pipeline failed: {str(e)}", exc_info=True)
-            error_status = {"error": str(e), "status": "failed"}
-            with open(os.path.join(OUTPUT_DIR, f"{job_id}.status"), "w") as f:
-                json.dump(error_status, f)
-            raise
-
-    asyncio.get_event_loop().run_in_executor(executor, run_pipeline)
-    logger.info(f"[{job_id}] Job submitted to executor")
+    asyncio.create_task(run_pipeline_task())
     return {"job_id": job_id}
-
-
-
-@app.get("/status/{job_id}")
-def status(job_id: str):
-    status_path = os.path.join(OUTPUT_DIR, f"{job_id}.status")
-    if os.path.exists(status_path):
-        with open(status_path) as f:
-            outputs = json.load(f)
-        duration = outputs.get("duration_seconds", None)
-        files = {
-            k: v
-            for k, v in outputs.items()
-            if k != "duration_seconds"
-            and isinstance(v, str)
-            and os.path.isfile(os.path.join(OUTPUT_DIR, v))
-        }
-        return {
-            "status": "done",
-            "outputs": files,
-            "duration_seconds": duration
-        }
-    return {"status": "processing"}
-
-@app.get("/download/{output_file}")
-def download_file(output_file: str):
-    path = os.path.join(OUTPUT_DIR, output_file)
-    return FileResponse(path, media_type="video/mp4", filename=output_file)
 
 @app.post("/analyze")
 async def analyze_file(file: UploadFile = File(...)):
-    # Use /tmp for analyze to avoid filling up project disk
     ext = file.filename.split('.')[-1]
     analyze_id = secrets.token_hex(6)
     tmp_path = os.path.join(tempfile.gettempdir(), f"analyze_{analyze_id}.{ext}")
+    loop = asyncio.get_running_loop()
 
     logger.info(f"[analyze-{analyze_id}] Starting analysis for: {file.filename}")
-
     try:
-        # Stream file in chunks
-        bytes_written = 0
         with open(tmp_path, "wb") as f:
             while True:
                 chunk = await file.read(app.state.upload_chunk_size)
                 if not chunk:
                     break
-                f.write(chunk)
-                bytes_written += len(chunk)
+                await loop.run_in_executor(None, f.write, chunk)
 
-        logger.info(f"[analyze-{analyze_id}] File saved to /tmp ({bytes_written / (1024*1024):.2f}MB), analyzing media streams...")
-
-        analysis = analyze_media(tmp_path)
+        analysis = await loop.run_in_executor(None, analyze_media, tmp_path)
         tracks = []
         for stream in analysis.get('streams', []):
-            track_info = {
+            tracks.append({
                 'index': stream['index'],
                 'type': stream['codec_type'],
                 'codec': stream.get('codec_name'),
@@ -341,10 +302,7 @@ async def analyze_file(file: UploadFile = File(...)):
                 'forced': stream.get('disposition', {}).get('forced', 0),
                 'title': stream.get('tags', {}).get('title', ''),
                 'id': stream.get('id', None)
-            }
-            tracks.append(track_info)
-
-        logger.info(f"[analyze-{analyze_id}] Analysis complete. Found {len(tracks)} tracks")
+            })
         return {'tracks': tracks, 'file_id': analyze_id}
     except Exception as e:
         logger.error(f"[analyze-{analyze_id}] Analysis failed: {str(e)}", exc_info=True)
@@ -372,8 +330,15 @@ def resolve_device(user_device: str = None):
     system = platform.system()
     if system == "Darwin":
         return "cpu", "videotoolbox"
+
+    # If user explicitly requested cpu, honor it
+    if user_device == "cpu":
+        return "cpu", "cpu"
+
+    # Otherwise try cuda if available
     if torch.cuda.is_available():
         return "cuda", "cuda"
+
     return "cpu", "cpu"
 
 # def mux_srt_into_video(video_in, srt_path, video_out):
@@ -435,6 +400,41 @@ def resolve_device(user_device: str = None):
 #
 #     subprocess.run(cmd, check=True)
 #     return video_out
+
+@app.get("/status/{job_id}")
+async def get_status(job_id: str):
+    status_path = os.path.join(OUTPUT_DIR, f"{job_id}.status")
+    if not os.path.exists(status_path):
+        return {"status": "not_found"}
+
+    try:
+        with open(status_path, "r") as f:
+            data = json.load(f)
+
+        if "status" in data and data["status"] == "failed":
+            return {"status": "failed", "error": data.get("error")}
+
+        # If it's the initial processing status
+        if "status" in data and data["status"] == "processing":
+            return {"status": "processing"}
+
+        # If it's finished (contains output files)
+        # We wrap the results in 'outputs' and set status to 'done' for the frontend
+        outputs = {k: v for k, v in data.items() if k not in ["duration_seconds", "status"]}
+        return {
+            "status": "done",
+            "outputs": outputs,
+            "duration_seconds": data.get("duration_seconds")
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    file_path = os.path.join(OUTPUT_DIR, filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, filename=filename)
+    return {"error": "File not found"}
 
 if __name__ == "__main__":
     import uvicorn

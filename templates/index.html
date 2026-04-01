@@ -61,6 +61,13 @@
   <label for="model">Model:</label>
   <select name="model" id="model" required></select>
 
+  <label for="translator_type">Translation Model:</label>
+  <select name="translator_type" id="translator_type" required>
+    <option value="m2m100">M2M100 (Multi-lingual)</option>
+    <option value="nllb">NLLB-200 (Best Quality)</option>
+    <option value="localllm">Helsinki-NLP (Fastest)</option>
+  </select>
+
   <button type="submit" style="grid-column: 1 / span 2;">Upload &amp; Process</button>
 </form>
 

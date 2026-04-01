@@ -77,9 +77,6 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 TEMPLATES_DIR = os.path.join(BASE_DIR2, "templates")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
-# translator3 = LocalLLMTranslate(MODEL_DIR)
-# translator2 = NLLBTranslate(MODEL_DIR)
-# translator = M2M100Translate(MODEL_DIR)
 executor = ThreadPoolExecutor(max_workers=4)  # allow parallel jobs
 
 
@@ -340,66 +337,6 @@ def resolve_device(user_device: str = None):
         return "cuda", "cuda"
 
     return "cpu", "cpu"
-
-# def mux_srt_into_video(video_in, srt_path, video_out):
-#     # Output container must support soft subs (MKV always, MP4 with mov_text)
-#     import subprocess
-#     ext = os.path.splitext(video_out)[1].lower()
-#     # For .mkv you can mux srt directly. For .mp4, you need to convert to mov_text.
-#     if ext == ".mkv":
-#         cmd = [
-#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-#             "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
-#         ]
-#     elif ext == ".mp4":
-#         # Convert srt to mov_text for MP4
-#         cmd = [
-#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-#             "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text", "-map", "0", "-map", "1", video_out
-#         ]
-#     elif ext == ".avi":
-#         # AVI does not support soft subs, use MKV instead
-#         video_out = os.path.splitext(video_out)[0] + ".mkv"
-#         cmd = [
-#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-#             "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
-#         ]
-#     else:
-#         # Default to MKV muxing
-#         video_out = os.path.splitext(video_out)[0] + ".mkv"
-#         cmd = [
-#             "ffmpeg", "-y", "-i", video_in, "-i", srt_path,
-#             "-c", "copy", "-c:s", "srt", "-map", "0", "-map", "1", video_out
-#         ]
-#     subprocess.run(cmd, check=True)
-#     return video_out
-#
-# def mux_multiple_srts_into_mkv(video_in, srt_paths, video_out):
-#     """
-#     srt_paths: list of tuples (lang_code, srt_path)
-#     """
-#     import subprocess
-#
-#     cmd = ["ffmpeg", "-y", "-i", video_in]
-#     # Add all srt files as inputs
-#     for _, srt_path in srt_paths:
-#         cmd += ["-i", srt_path]
-#     cmd += ["-c", "copy"]
-#     # For each srt, add a mapping, and assign language/label
-#     # First stream is video_in, srt files are inputs 1,2,3...
-#     # "-map 0" maps all streams from the original video
-#     cmd += ["-map", "0"]
-#     for idx, (lang, _) in enumerate(srt_paths):
-#         cmd += ["-map", str(idx + 1)]
-#     # Subtitle codecs: srt
-#     cmd += ["-c:s", "srt"]
-#     # Set language for each srt stream
-#     for idx, (lang, _) in enumerate(srt_paths):
-#         cmd += [f"-metadata:s:s:{idx}", f"language={lang}"]
-#     cmd += [video_out]
-#
-#     subprocess.run(cmd, check=True)
-#     return video_out
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):

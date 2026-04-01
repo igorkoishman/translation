@@ -16,10 +16,6 @@ def burn(video_path, srt_path, output_path, device=None, mask_percent=0.25,maske
     # Font settings
     font_name = "Arial"
     alignment = 2  # bottom-center
-    # Calculate vertical margin to center subs in the masked area
-    # Approximate: MarginV = half of the masked area height in pixels
-    # (Will work for 720p/1080p and up; you can auto-calculate if you want)
-    # margin_v = 80  # Default for 1080p and mask_percent=0.25. Adjust for your videos!
     video_height = get_video_height(video_path)
     if masked:
         margin_v = int(video_height * mask_percent / 2)
@@ -27,8 +23,6 @@ def burn(video_path, srt_path, output_path, device=None, mask_percent=0.25,maske
     else:
         margin_v = 40
         force_style = f"FontName={font_name}"
-
-    # force_style = f"FontName={font_name},Alignment={alignment},MarginV={margin_v}"
 
     if not device:
         system = platform.system()

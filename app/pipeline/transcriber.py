@@ -23,19 +23,21 @@ class FasterWhisperTranscriber(Transcriber):
     def transcribe(self, audio_path, language=None,align_output=True):
         model_path = self.get_model_path()
         compute_type = "int8_float32" if self.device.startswith("cuda") else "float32"
-        if not os.path.isdir(model_path) or not os.listdir(model_path):
-            # Download model if not present
+        if not os.path.exists(os.path.join(model_path, "model.bin")):
+            # Download or flatten model if not present in the root of model_path
             os.makedirs(model_path, exist_ok=True)
-            os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
-            ssl._create_default_https_context = ssl._create_unverified_context
-            whisperx.load_model(
-                self.model_size,
-                device=self.device,
-                compute_type=compute_type,
-                download_root=model_path,
-                local_files_only=False
-            )
+            if not any(f.startswith("models--") for f in os.listdir(model_path)):
+                os.environ["HF_HUB_DISABLE_SSL_VERIFICATION"] = "1"
+                ssl._create_default_https_context = ssl._create_unverified_context
+                whisperx.load_model(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=compute_type,
+                    download_root=model_path,
+                    local_files_only=False
+                )
             flatten_whisper_snapshot(model_path)
+        
         model = whisperx.load_model(
             model_path, device=self.device, compute_type=compute_type, local_files_only=True
         )
@@ -51,49 +53,6 @@ class FasterWhisperTranscriber(Transcriber):
             except Exception as e:
                 print(f"⚠️ Alignment failed: {e}")
         return transcribed,language
-
-
-# class OpenAIWhisperTranscriber(Transcriber):
-#     def __init__(self, models_root,backend_name,model_size,device):
-#         self.models_root = models_root
-#         self.device = device
-#         self.backend_name = backend_name
-#         self.model_size = model_size
-#
-#     def get_model_path(self):
-#         folder_name = f"{self.backend_name}-{self.model_size}"
-#         return os.path.join(self.models_root, folder_name)
-#
-#     def transcribe(self, audio_path, language=None,align_output=True):
-#         model_path = self.get_model_path()
-#         os.makedirs(model_path, exist_ok=True)
-#         spec = importlib.util.find_spec("whisper")
-#         if not spec:
-#             raise ImportError("OpenAI Whisper not found.")
-#         openai_whisper = importlib.util.module_from_spec(spec)
-#         spec.loader.exec_module(openai_whisper)
-#
-#         # Optionally download to model_dir; otherwise, uses default cache
-#         model_kwargs = {"device": self.device}
-#         if model_path is not None:
-#             model_kwargs["download_root"] = model_path
-#
-#         model = openai_whisper.load_model(self.model_size, **model_kwargs)
-#         transcribed = model.transcribe(audio_path, language=language)
-#         language = transcribed["language"]
-#         if align_output:
-#             print(f"Aliging Rows")
-#             try:
-#                 model_a, metadata = whisperx.load_align_model(
-#                     language_code=transcribed.get("language", language or "und"),
-#                     device=self.device
-#                 )
-#                 print("Starting alignment...")
-#                 transcribed = whisperx.align(transcribed["segments"], model_a, metadata, audio_path, self.device)
-#                 print("Alignment finished.")
-#             except Exception as e:
-#                 print(f"⚠️ Alignment failed: {e}")
-#         return  transcribed,language
 
 
 class OpenAIWhisperTranscriber(Transcriber):
@@ -144,7 +103,7 @@ class OpenAIWhisperTranscriber(Transcriber):
 
 
 def flatten_whisper_snapshot(model_base_dir: str):
-    snapshot_pattern = os.path.join(model_base_dir, "models--*--faster-whisper-*", "snapshots", "*")
+    snapshot_pattern = os.path.join(model_base_dir, "models--*", "snapshots", "*")
     snapshot_dirs = glob.glob(snapshot_pattern)
     if not snapshot_dirs:
         print("❌ No snapshot directory found.")

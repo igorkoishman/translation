@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 # Configure Python & environment
 # where whisper/transformers will cache models
@@ -10,16 +10,27 @@ ENV DEBIAN_FRONTEND=noninteractive \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+ && add-apt-repository ppa:deadsnakes/ppa \
+ && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-dev \
     ffmpeg \
     tesseract-ocr \
     git \
     libgl1 \
     libglib2.0-0 \
+    curl \
+ && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
  && rm -rf /var/lib/apt/lists/*
+
+# Set python3.12 as default python
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python \
+ && ln -sf /usr/bin/python3.12 /usr/bin/python3
 
 # Install Python deps first for better caching
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3.12 -m pip install --no-cache-dir -r requirements.txt
 
 # Copy app code
 COPY . /app

@@ -27,11 +27,11 @@ def ensure_model_downloaded(model_id, cache_dir=None):
         else:
             AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
         try:
-            AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir)
+            AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir, use_safetensors=True)
         except OSError as e:
             if "pytorch_model.bin" in str(e) and "TensorFlow weights" in str(e):
                 print(f"Retrying {model_id} with from_tf=True ...", flush=True)
-                AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir, from_tf=True)
+                AutoModelForSeq2SeqLM.from_pretrained(model_id, cache_dir=cache_dir, from_tf=True, use_safetensors=True)
             else:
                 raise
         print(f"Model {model_id} is ready.", flush=True)
@@ -64,86 +64,6 @@ def get_pipeline_with_tf_fallback(*args, **kwargs):
             return hf_pipeline(*args, from_tf=True, **kwargs)
         else:
             raise
-
-# class LocalLLMTranslate(Translator):
-#     def __init__(self, model_path="./model"):
-#         self._pipeline_cache = {}
-#         self.MODEL_CACHE_DIR = model_path
-#
-#     # Add all Helsinki model variants you want to try, in priority order
-#     MODEL_VARIANTS = [
-#         "opus-mt-tc-big-",
-#         "opus-mt-pre-",
-#         "opus-mt-big-",
-#         "opus-mt-"
-#     ]
-#
-#     def translate(self, text, src_lang, target_lang):
-#         src = src_lang.lower()
-#         tgt = target_lang.lower()
-#         attempts = []
-#
-#         src_codes = [src]
-#         if src == "he":
-#             src_codes.append("iw")
-#         elif src == "iw":
-#             src_codes.append("he")
-#         tgt_codes = [tgt]
-#         if tgt == "he":
-#             tgt_codes.append("iw")
-#         elif tgt == "iw":
-#             tgt_codes.append("he")
-#
-#         tried_keys = set()
-#         for src_code in src_codes:
-#             for tgt_code in tgt_codes:
-#                 key = (src_code, tgt_code)
-#                 if key in tried_keys:
-#                     continue
-#                 tried_keys.add(key)
-#                 for model_variant in self.MODEL_VARIANTS:
-#                     model_name = f"Helsinki-NLP/{model_variant}{src_code}-{tgt_code}"
-#                     pipeline_task = f"translation_{src_code}_to_{tgt_code}"
-#                     if key not in self._pipeline_cache:
-#                         print(f"Trying model: {model_name} ...", flush=True)
-#                         try:
-#                             self._pipeline_cache[key] = get_pipeline_with_tf_fallback(
-#                                 pipeline_task, model=model_name, cache_dir=self.MODEL_CACHE_DIR
-#                             )
-#                         except Exception as e:
-#                             attempts.append((pipeline_task, model_name, str(e)))
-#                             print(f"Failed: {model_name} ({str(e)})", flush=True)
-#                             continue
-#                     translator = self._pipeline_cache.get(key)
-#                     if translator:
-#                         print(f"Using model: {model_name}", flush=True)
-#                         result = translator(text)
-#                         return result[0]["translation_text"]
-#
-#         raise ValueError(
-#             f"Could not load any HuggingFace Helsinki-NLP model for {src_lang}→{target_lang}. "
-#             f"Tried: {attempts}"
-#         )
-#
-#     def translate_srt(self, input_srt, output_srt, src_lang, tgt_lang):
-#         with open(input_srt, "r", encoding="utf-8") as f:
-#             subs = list(srt.parse(f.read()))
-#         translated_subs = []
-#         for i, sub in enumerate(subs, 1):
-#             try:
-#                 print(f"Translating subtitle {i}/{len(subs)}...", flush=True)
-#                 text = self.translate(sub.content, src_lang, tgt_lang)
-#             except Exception as e:
-#                 print(f"Translation error (subtitle {i}): {e}", flush=True)
-#                 text = sub.content
-#             translated_subs.append(srt.Subtitle(
-#                 index=sub.index,
-#                 start=sub.start,
-#                 end=sub.end,
-#                 content=text
-#             ))
-#         with open(output_srt, "w", encoding="utf-8") as f:
-#             f.write(srt.compose(translated_subs))
 
 
 class LocalLLMTranslate(Translator):

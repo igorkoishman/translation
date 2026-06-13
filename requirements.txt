@@ -7,17 +7,20 @@ python-dotenv~=1.1.1
 requests
 srt~=3.5.3
 ffmpeg-python
+matplotlib>=3.8
 
 # --- ASR stack (OpenAI Whisper + optional WhisperX alignment) ---
 openai-whisper
-# Torch CPU wheels (let pip pick a compatible version):
-torch --index-url https://download.pytorch.org/whl/cpu
-torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Torch stable versions
+torch == 2.5.1
+torchaudio == 2.5.1
 
 # Alignment / extras (if you use your align step)
 whisperx==3.4.2
+pyannote-audio==3.3.2
 transformers~=4.53.2
 huggingface-hub~=0.33.4
+omegaconf
 
 # OCR / CV (since your Dockerfile installs tesseract)
 pytesseract~=0.3.13

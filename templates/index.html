@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>Auto Subtitle Generator</title>
-  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=2" />
 </head>
 <body>
   <div class="container">
@@ -15,6 +15,9 @@
 
   <!-- Row: Track selectors, spans both columns as a row -->
   <div id="track-selectors" style="display:none; grid-column: 1 / span 2;">
+    <div id="analyze-status" style="grid-column: 1 / span 2; padding: 10px; background: #e3f2fd; border-radius: 5px; margin-bottom: 10px; display:none;">
+      <strong>Analyzing file:</strong> <span id="analyze-progress">0%</span>
+    </div>
     <label for="audio-track">Audio Track for Transcription:</label>
     <select id="audio-track" name="audio_track"></select>
     <label for="subtitle-track">Subtitle Track (optional):</label>
@@ -57,6 +60,13 @@
 
   <label for="model">Model:</label>
   <select name="model" id="model" required></select>
+
+  <label for="translator_type">Translation Model:</label>
+  <select name="translator_type" id="translator_type" required>
+    <option value="m2m100">M2M100 (Multi-lingual)</option>
+    <option value="nllb">NLLB-200 (Best Quality)</option>
+    <option value="localllm">Helsinki-NLP (Fastest)</option>
+  </select>
 
   <button type="submit" style="grid-column: 1 / span 2;">Upload &amp; Process</button>
 </form>
@@ -119,6 +129,6 @@
       </table>
     </div>
   </div>
-  <script src="/static/js/upload.js"></script>
+  <script src="/static/js/upload.js?v=2"></script>
 </body>
 </html>

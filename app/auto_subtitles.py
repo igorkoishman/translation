@@ -8,8 +8,11 @@ import srt
 import cv2
 import pytesseract
 from PIL import Image
+import logging
 
 from app.pipeline.FFmpegBurner import mux_multiple_srts_into_mkv, burn
+
+logger = logging.getLogger(__name__)
 
 
 class AutoSubtitlePipeline:
@@ -185,28 +188,35 @@ class AutoSubtitlePipeline:
             output_languages=None, language=None, device=None,
             align_output=True, subtitle_burn_type="hard",translation_model_path=None
     ):
+        logger.info(f"Starting subtitle processing for: {video_path}")
+        logger.info(f"Output languages: {output_languages}, burn type: {subtitle_burn_type}")
 
         output_files = {}
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            logger.info(f"Created temporary directory: {tmpdir}")
             masked = self.detect_burned_in_subs(video_path)
             if masked:
-                print("Burned-in subtitles detected. Masking area before burning new subtitles.")
+                logger.info("Burned-in subtitles detected. Masking area before burning new subtitles.")
                 masked_path = os.path.join(tmpdir, "masked.mp4")
                 self.mask_subtitle_area(video_path, masked_path, percent=0.25)
                 video_for_burn = masked_path
             else:
+                logger.info("No burned-in subtitles detected.")
                 video_for_burn = video_path
 
             audio_for_transcription = audio_path or video_for_burn
             if not (audio_for_transcription.endswith('.wav') and os.path.exists(audio_for_transcription)):
                 audio_temp_path = os.path.join(tmpdir, "audio.wav")
+                logger.info(f"Extracting audio to: {audio_temp_path}")
                 self.extract_audio(video_for_burn, audio_temp_path)
                 audio_for_transcription = audio_temp_path
 
+            logger.info(f"Starting transcription with language: {language}, align: {align_output}")
             result, src_lang = self.transcriber.transcribe(
                 audio_for_transcription, language=language, align_output=align_output
             )
+            logger.info(f"Transcription complete. Detected language: {src_lang}, segments: {len(result.get('segments', []))}")
             srt_paths = {}
 
             # --- Create all SRTs first ---
@@ -218,7 +228,9 @@ class AutoSubtitlePipeline:
 
             # --- Handle translations ---
             if output_languages:
+                logger.info(f"Translating subtitles to: {output_languages}")
                 for lang in output_languages:
+                    logger.info(f"Creating translation for: {lang}")
                     srt_path = os.path.join(tmpdir, f"subtitles_{lang}.srt")
                     self.create_srt(
                         result['segments'], src_lang=src_lang,
@@ -228,8 +240,10 @@ class AutoSubtitlePipeline:
 
             # --- Hard-burn (still per-language and original) ---
             if subtitle_burn_type in ("hard", "both"):
+                logger.info("Starting hard-burn subtitle process")
                 # Hard-burn original
                 out_video_orig = f"{base_out}_orig{ext}"
+                logger.info(f"Burning original subtitles to: {out_video_orig}")
                 burn(video_for_burn, srt_orig, out_video_orig, device=device, masked=masked)
                 output_files["orig"] = os.path.basename(out_video_orig)
                 # Hard-burn translations
@@ -237,31 +251,37 @@ class AutoSubtitlePipeline:
                     for lang in output_languages:
                         srt_path = srt_paths[lang]
                         out_video = f"{base_out}_{lang}{ext}"
+                        logger.info(f"Burning {lang} subtitles to: {out_video}")
                         burn(video_for_burn, srt_path, out_video, device=device, masked=masked)
                         output_files[lang] = os.path.basename(out_video)
 
             # --- Soft-mux: make one MKV with ALL SRTs ---
             if subtitle_burn_type in ("soft", "both"):
+                logger.info("Starting soft-mux subtitle process")
                 # Collect all SRTs and languages (original + translations)
                 multi_soft_mkv = f"{base_out}_multi_soft.mkv"
                 srt_list = [("und", srt_paths["orig"])]  # orig is typically "und" unless you have lang code
                 if output_languages:
                     for lang in output_languages:
                         srt_list.append((lang, srt_paths[lang]))
+                logger.info(f"Muxing {len(srt_list)} subtitle tracks into: {multi_soft_mkv}")
                 mux_multiple_srts_into_mkv(video_for_burn, srt_list, multi_soft_mkv)
                 output_files["multi_soft"] = os.path.basename(multi_soft_mkv)
 
             # Move SRTs to output location and add to output_files
+            logger.info("Moving SRT files to output directory")
             for lang, path in srt_paths.items():
                 final_srt_path = f"{base_out}_{lang}.srt"
                 shutil.move(path, final_srt_path)
                 output_files[f"{lang}_srt"] = os.path.basename(final_srt_path)
+                logger.info(f"Moved {lang} SRT to: {final_srt_path}")
 
             # Also move and track the original SRT file
             # final_srt_orig_path = f"{base_out}_orig.srt"
             # shutil.move(srt_orig, final_srt_orig_path)
             # output_files["orig_srt"] = os.path.basename(final_srt_orig_path)
 
+            logger.info(f"Process complete. Total output files: {len(output_files)}")
             return output_files
 
 
